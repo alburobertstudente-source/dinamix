@@ -29,6 +29,13 @@ o di sicurezza. Nessuna accuratezza è dichiarata, perché nessuna è stata misu
 15. Architettura software e Android
 16. Decisioni che spettano a te
 17. Punti aperti e piano delle fasi successive
+18. Quality assurance: cosa si può verificare, dove e come
+19. Identità visiva e logo
+20. Scenari animati
+21. Esperienza utente e navigazione
+22. Prestazioni grafiche e separazione dal motore
+23. Preparazione alla distribuzione
+24. Domande aggiuntive (oltre al §16)
 
 ---
 
@@ -1037,3 +1044,324 @@ I dati grezzi dell'evento vanno in `samples` (sessione automatica "evento").
 
 DYNAMIX **non sarà dichiarato pronto per la sicurezza personale** senza una
 validazione reale sufficiente e documentata.
+
+
+---
+
+# Parte II — QA, design, distribuzione (sezioni 21–27 della specifica)
+
+## 18. Quality assurance: cosa si può verificare, dove e come
+
+### 18.1 Ambienti disponibili (verificati, non presunti)
+
+| Ambiente | Cosa permette | Cosa **non** permette |
+|---|---|---|
+| Container di sviluppo (questa sessione) | `flutter analyze`, unit e widget test, golden/screenshot, build Android dopo l'installazione dell'SDK | **Nessun emulatore**: `/dev/kvm` assente, e senza accelerazione l'emulatore non è utilizzabile. Nessun dispositivo reale |
+| GitHub Actions (runner Linux) | Build release, Android Lint, test, e un **emulatore con KVM** per i test di strumentazione, se KVM è disponibile sul runner del repository (**da verificare** con una run di prova) | Dispositivi reali, sensori reali |
+| Dispositivo reale (tuo) | L'unica verifica di sensori veri, suono, SMS reale, batteria e comportamento del produttore in background | Automazione completa |
+
+Conseguenza: i punti 3–10 della procedura di verifica dell'APK della specifica
+(installazione su **dispositivo reale**, registrazione, sensori, simulazione,
+ciclo di vita) **non posso eseguirli io**. Li coprirò in due modi:
+
+1. automatizzati su **emulatore in CI** (dove l'emulatore lo consente);
+2. un **protocollo manuale** per il telefono reale (§18.5), con un log dei
+   crash esportabile dall'app per riportarmi i problemi.
+
+Il rapporto finale distinguerà sempre "verificato su emulatore API x",
+"verificato su dispositivo y" e "non verificato".
+
+### 18.2 Livelli di test
+
+| Livello | Strumento | Copertura |
+|---|---|---|
+| Unit | `flutter test` | Matematica (orientamento con rotazioni note, caduta libera analitica, jerk su rampe e parabole, Δv), validazione del profilo, macchina a stati dell'allarme, idempotenza SMS (con `FakeSmsSender`), migrazioni del DB |
+| Widget / UI | `flutter test` + golden | Ogni schermata, inclusi stati di errore, caricamento e vuoti; testo grande (scala 2,0); modalità chiara e scura; animazioni ridotte |
+| Integration | `integration_test` su emulatore | Primo avvio → registrazione → dashboard; monitoraggio con sensori iniettati; allarme → annulla; allarme → 60 s → invio con `DryRun` |
+| Instrumentation (Android) | JUnit + AndroidX Test (Kotlin) | Servizio in primo piano, acquisizione, timer nativo, `SmsManager` (sull'emulatore l'invio è locale), audio |
+| Ciclo di vita | `adb` | Rotazione (`settings put system user_rotation`), background/foreground (`input keyevent HOME`), terminazione del processo (`am kill`) e riapertura, `am force-stop`, permessi revocati (`pm revoke`) durante l'uso, modalità aereo |
+| Carico | Simulatore + `ReplaySource` | Motore a 200 Hz accelerati (×10–×100): tempo per campione, nessuna crescita di memoria |
+| Prolungato | Emulatore in CI | Monitoraggio di 1–4 h (limite del job CI): `dumpsys meminfo` periodico, conteggio campioni persi, log |
+| Stress UI | `adb shell monkey` | Eventi casuali con seed fisso, zero crash ammessi |
+| Gestione errori | Unit + integration | Sensore mancante, GPS assente, permesso SMS negato, DB pieno, storage cifrato non leggibile |
+| Statica | `flutter analyze`, **Android Lint** (`gradlew lint`) | Avvisi trattati come errori nella CI, con eccezioni documentate |
+
+Sensori sull'emulatore: `adb emu sensor set acceleration x:y:z` e
+`adb emu geo fix` permettono di **iniettare** valori. Verificano il percorso
+dei dati, non il realismo del segnale (che resta compito del simulatore e dei
+dati reali).
+
+### 18.3 Crash e problemi da cercare (dove e come)
+
+| Categoria | Verifica |
+|---|---|
+| Avvio, riapertura, rotazione, background | Test del ciclo di vita (§18.2). Logcat filtrato per `FATAL EXCEPTION`, `ANR`, `E/flutter` e salvato come artefatto della CI |
+| Registrazione | Widget test con input limite (vuoto, solo spazi, 51 caratteri, emoji, età 0/121/"abc") |
+| Sensori e monitoraggio prolungato | Test prolungato; watchdog del flusso; campioni persi contati |
+| Permessi negati | Ogni permesso negato e revocato durante l'uso: l'app degrada e non crasha |
+| GPS, allarme, SMS | Instrumentation su emulatore e protocollo manuale |
+| Memoria e leak | `dumpsys meminfo` nel tempo; in Dart, controllo delle sottoscrizioni chiuse (`StreamSubscription`, `Timer`, `AnimationController`) con test di dispose |
+| Thread bloccati e ANR | Nessun I/O sul thread UI nativo; StrictMode attivo nelle build di debug |
+| Sincronizzazione | Un solo proprietario per lo stato dell'allarme (il servizio). Dart lo osserva e non lo duplica |
+| Eccezioni non gestite | `FlutterError.onError` e `PlatformDispatcher.onError` in Dart, `Thread.setDefaultUncaughtExceptionHandler` in Kotlin: tutto in un **log locale** esportabile, senza invio automatico (privacy, §13) |
+
+Problemi già noti dal codice attuale:
+
+- crash della schermata Sessione corretto in questo branch (chiavi duplicate
+  delle animazioni);
+- il test degli screenshot falliva in silenzio, corretto e ora bloccante.
+
+### 18.4 Requisiti per considerare "verificata" una versione
+
+1. Build release senza errori; Lint senza errori.
+2. Tutti i test automatici verdi.
+3. Test su emulatore verdi su almeno **API 26, 30, 34 e 36** (minimo,
+   intermedi, target).
+4. Protocollo manuale eseguito su **almeno un dispositivo reale**, con modello
+   e versione Android annotati.
+5. Rapporto con: test superati e falliti, crash trovati, correzioni, problemi
+   aperti, dispositivi, hash SHA-256 dell'APK verificato.
+
+L'app **non sarà dichiarata priva di crash**: sarà dichiarato ciò che è stato
+verificato, dove e su quale APK.
+
+### 18.5 Protocollo manuale per il dispositivo reale (bozza)
+
+1. Installazione pulita.
+2. Prima apertura e logo.
+3. Registrazione con errori voluti, poi valida.
+4. Dashboard: stato dei sensori.
+5. Diagnostica: valori stabili da fermo (|a| vicino a 0, G vicino a 0).
+6. Rotazione lenta e rapida: nessuna falsa accelerazione.
+7. Simulazione dalla diagnostica.
+8. Allarme di prova: suono, schermata, annulla.
+9. Allarme di prova senza annullare, con `DryRun`: verificare che "invio
+   simulato" compaia nello storico.
+10. Contatto: verifica del formato; test d'invio **reale** solo se lo confermi.
+11. Background 10 min con schermo spento, poi riapertura.
+12. Chiusura dalle app recenti: il monitoraggio prosegue? (§15.3)
+13. Revoca dei permessi dalle impostazioni di sistema durante l'uso.
+14. Export del log e invio a me in caso di problemi.
+
+---
+
+## 19. Identità visiva e logo
+
+### 19.1 Concetto
+
+**Concetto proposto per il logo:** "vettore in movimento". La **X** di DYNAMIX
+è formata da due tratti che richiamano gli assi di un sensore inerziale, uno dei
+quali termina con una piccola cuspide, come una traccia di accelerazione con un
+picco. Il simbolo (la sola X stilizzata dentro una forma arrotondata) diventa
+l'icona.
+
+Alternative da mostrarti come bozze prima di scegliere:
+
+- una "D" con un'onda di segnale interna;
+- un rombo prospettico che ricorda le montagne.
+
+### 19.2 Wordmark
+
+Wordmark costruito e non "testo scritto con un font":
+
+- base tipografica geometrica con licenza **SIL Open Font License**,
+  incorporabile e ridistribuibile anche commercialmente (candidati: Sora,
+  Space Grotesk, Inter Tight; scelta dopo le bozze);
+- lettere ridisegnate come **tracciati vettoriali**: X modificata, crenatura
+  manuale, spessori ottici.
+
+Il logo finale è un tracciato, quindi non dipende dal font installato.
+
+### 19.3 Asset da produrre
+
+- **Sorgente**: SVG vettoriale.
+- **App**: `CustomPainter`/`Path` generato dall'SVG, nitido a ogni scala.
+- **Versioni**: chiara, scura, monocromatica.
+- **Icona Android adattiva**: primo piano e sfondo separati, più un livello
+  **monocromatico** per le icone a tema di Android 13+, con raster mdpi–xxxhdpi
+  generati dall'SVG.
+- **Splash nativa**: con l'API SplashScreen di Android 12+, che ammette solo
+  icona e sfondo.
+- **Splash animata Flutter**: subito dopo quella nativa, con il logo che "si
+  disegna", durata ≤ 1,2 s, e senza animazione se è attiva l'opzione di
+  riduzione delle animazioni.
+
+### 19.4 Sistema grafico (design tokens)
+
+Un unico file di token, che evolve l'attuale `theme.dart` (che ha già
+`Palette` e il tema scuro):
+
+- **Colori**: primario, secondario, superfici a 3 livelli e stati
+  (ok/attenzione/pericolo/incerto). Contrasto **WCAG AA** verificato con un test
+  automatico sui token (4,5:1 per il testo).
+- **Tipografia**: scala a 7 passi (display → caption), numeri tabulari per i
+  valori dei sensori.
+- **Spaziature**: griglia a 4 dp. Raggi 8/14/20. Ombre a 3 livelli di elevazione.
+- **Movimento**: durate 120/200/320 ms con curve standard. Ogni animazione
+  rispetta l'impostazione "riduci animazioni" e il flag di accessibilità del
+  sistema.
+- **Componenti riutilizzabili**: pulsante primario e secondario, card di stato,
+  badge del livello, indicatore di confidenza, riga del sensore, finestra di
+  conferma, stato vuoto, stato di errore.
+- **Modalità**: scura come predefinita, chiara completa (l'app ha già entrambe
+  le basi).
+
+Verifica visiva: golden test per ogni schermata in chiaro, scuro e testo
+grande. **Il giudizio estetico finale resta tuo**: ti mostrerò le bozze prima
+di integrarle.
+
+---
+
+## 20. Scenari animati
+
+### 20.1 Tecnologie a confronto
+
+| Tecnologia | Pro | Contro | Verdetto |
+|---|---|---|---|
+| Lottie | Molto diffusa | Richiede animazioni create in After Effects da un animatore. JSON pesanti per scene complesse. Personaggi limitati a ciò che è stato animato | Solo con asset di un designer |
+| Rive | State machine interattive, runtime efficiente | Gli asset si creano nell'editor Rive (strumento grafico): non posso produrli in modo affidabile da codice | Ottima se fornisci o commissioni gli asset |
+| Sprite | Semplici | Pesanti in MB a più densità; movimento a scatti se i fotogrammi sono pochi | No |
+| 3D | Profondità reale | Costo di GPU e batteria non giustificato in una dashboard | No |
+| **Vettoriale procedurale** (`CustomPainter`, già usato da `AuroraBackground` e `MotionShield`) | Zero asset; nitido a ogni densità; livello di dettaglio regolabile; personaggi con **cinematica reale** | Stile illustrato e non fotografico | **Scelta** |
+
+### 20.2 Scena montana (procedurale)
+
+- **Montagne**: 4–5 livelli di profilo generati una volta sola con rumore
+  frattale (spostamento del punto medio, seed fisso, quindi sempre uguali), con
+  neve sulle creste sopra una quota e ombreggiatura per pendenza rispetto alla
+  direzione del sole.
+- **Parallasse**: ogni livello si sposta con fattore 1/profondità, guidato
+  dall'inclinazione del telefono (dall'orientamento già stimato dal motore,
+  fortemente smorzato) oppure da un'oscillazione lenta.
+- **Cielo e luce**: gradiente che segue un ciclo lento (alba → giorno →
+  tramonto in alcuni minuti, oppure l'ora reale), con il colore della neve
+  coerente.
+- **Nuvole**: forme a più cerchi sfumati, con deriva a velocità diverse per
+  livello.
+- **Neve**: particelle con caduta a velocità terminale, oscillazione laterale e
+  dimensione secondo la profondità. Numero adattivo (§22).
+
+### 20.3 Personaggi con movimento naturale
+
+Scheletro 2D (bacino, busto, testa, braccia e gambe a 2 segmenti) disegnato a
+forme piene, nello stile delle illustrazioni moderne:
+
+- **Camminata ed escursionismo**: angoli di anca, ginocchio e caviglia come
+  serie di Fourier a 2–3 armoniche del ciclo del passo, con la forma delle
+  curve dalla biomeccanica del passo. Oscillazione verticale del bacino a
+  frequenza doppia del passo. Bastoncini in controfase.
+- **Sci**: traiettoria a curve ad "S" lungo il pendio (spline). Inclinazione del
+  corpo verso l'interno della curva secondo tan(φ) = v²/(g·R), quindi fisica
+  reale. Flessione-estensione delle gambe a ogni cambio di curva. Scia di neve
+  sollevata.
+- **Contatto col terreno**: i piedi seguono il profilo del sentiero con
+  cinematica inversa a 2 segmenti, così non "pattinano".
+
+Pochi personaggi (1–3) sullo sfondo, piccoli, che **non coprono mai**
+informazioni o pulsanti.
+
+### 20.4 Integrazione e accessibilità
+
+- La scena sta dietro la dashboard, con un velo che garantisce il contrasto
+  AA dei testi sopra.
+- Si ferma fuori schermo e in background, e rispetta "riduci animazioni" con
+  tre opzioni: completa / leggera / statica.
+- Il livello di pericolo resta sempre l'elemento più visibile. Con un livello
+  ≥ 3 la scena si ferma, perché non deve distrarre.
+
+---
+
+## 21. Esperienza utente e navigazione
+
+| # | Schermata | Funzione | Stato attuale |
+|---|---|---|---|
+| 1 | Splash animata | Marchio e caricamento | Da creare |
+| 2 | Registrazione | Profilo (§13) | Da creare |
+| 3 | Introduzione guidata (3 pagine) | Cosa fa e non fa DYNAMIX, permessi spiegati prima di chiederli, limiti dichiarati | Da creare |
+| 4 | Dashboard | §15.6 + scena | Evoluzione della home |
+| 5 | Monitoraggio | Sessione attiva | Evoluzione di `session_screen` |
+| 6 | Diagnostica sensori | §15.6 | Nuova (rilevamento) + esistente (BLE) |
+| 7 | Storico eventi | Lista e dettaglio, con etichettatura manuale per il dataset | Nuova (riusa l'analisi) |
+| 8 | Impostazioni | Profilo, animazioni, campionamento, privacy, cancellazione dati | Evoluzione |
+| 9 | Contatto di emergenza | §12.5 | Nuova |
+| 10 | Informazioni | Versione, licenze (`showLicensePage`), privacy, limiti del sistema | Nuova |
+| — | Allarme | Schermata a tutto schermo (§12.4) | Nuova |
+
+Le schermate esistenti legate alla SensorTile (dispositivi, live, logger,
+analisi) restano raggiungibili dalla diagnostica.
+
+Regole comuni:
+
+- ogni azione dà un riscontro visibile;
+- ogni operazione distruttiva chiede conferma;
+- stati di caricamento, vuoto ed errore per ogni lista;
+- `Semantics` sulle icone e sugli indicatori;
+- target di tocco ≥ 48 dp;
+- testo scalabile fino a 2× senza overflow, verificato con golden test (il
+  crash di oggi era proprio un overflow nascosto);
+- **nessun pulsante senza funzione**: un test elenca i pulsanti di ogni
+  schermata e verifica che abbiano `onPressed`.
+
+---
+
+## 22. Prestazioni grafiche e separazione dal motore
+
+- **Separazione**: acquisizione su un thread nativo con timestamp hardware e
+  FIFO. Motore di rilevamento in un **motore Flutter separato**, posseduto dal
+  servizio (§15.3), quindi su un thread diverso da quello della UI. Un fotogramma
+  lento della UI non può né perdere né ritardare i campioni del motore.
+  Test: frequenza misurata dal motore con e senza animazioni, che deve restare
+  invariata entro il jitter.
+- **Rendering**: profili delle montagne calcolati una volta sola e messi in
+  cache, ogni livello in un `RepaintBoundary`, animazione con sole
+  trasformazioni dove possibile, particelle in `drawPoints`/`drawAtlas` (una
+  sola chiamata), nessuna allocazione per fotogramma.
+- **Livelli di qualità automatici**: si misura il tempo dei fotogrammi nei primi
+  secondi (`FrameTiming`). Se il 90° percentile supera il budget (16,7 ms a
+  60 Hz), si scende di livello (meno particelle, meno livelli, nessun
+  personaggio), fino a una scena statica.
+- **Misure** (CI e dispositivo): tempi di fotogramma con
+  `integration_test` + `traceAction` (build e raster, 90° e 99° percentile),
+  CPU e memoria con `dumpsys`, GPU con `dumpsys gfxinfo`, tempo di avvio con
+  `am start -W`, batteria come nel §15.4. I numeri vengono **misurati e
+  riportati**, non stimati.
+
+---
+
+## 23. Preparazione alla distribuzione
+
+| Punto | Situazione attuale (verificata) | Proposta |
+|---|---|---|
+| Nome | `android:label="DinamiX"` | "DYNAMIX", se confermi (§24). Verificare la disponibilità del nome e del marchio (non verificabile da qui) |
+| Package | `com.dinamix.dinamix` (generato da `flutter create --org com.dinamix`) | Su Google Play è **immutabile** dopo la pubblicazione: scegliere ora il definitivo, possibilmente su un dominio che controlli |
+| Versioning | `version: 1.0.0+1` fisso: ogni APK ha versionCode 1 | versionCode crescente automatico in CI (numero della run), versionName semantico |
+| **Firma** | Release firmata con la **chiave di debug**, rigenerata a ogni run CI | Causa dell'errore "App non installata" negli aggiornamenti. Serve una **chiave di upload** creata da te, conservata nei Secrets di GitHub e mai nel repository. Per Play: Play App Signing. **Non la creo né la modifico senza la tua autorizzazione** |
+| Progetto Android | La cartella `android/` viene in buona parte **rigenerata** a ogni build da `flutter create` | Committare la configurazione Android completa (gradle, firma, manifest, risorse) per una build riproducibile |
+| Formato | APK universale da 55 MB | APK per ABI (`--split-per-abi`) per l'installazione diretta, **AAB** per Play |
+| SDK | min 24, target 36, compile 36 (valori predefiniti di Flutter 3.47) | Matrice di test §18.4. Android 7.0 (API 24) da mantenere solo se il test lo conferma |
+| Permessi | BLE, servizio in primo piano, notifiche, wake lock | Aggiunte previste: tipo `health`/`location` del servizio, `SEND_SMS`, posizione, `USE_FULL_SCREEN_INTENT`, `VIBRATE`. Ognuno motivato e richiesto al bisogno |
+| Backup | `allowBackup` non impostato (quindi attivo) | Escludere profilo e contatto dal backup (§13.2) |
+| Offuscamento | Non configurato | R8 + `--obfuscate --split-debug-info` (simboli conservati per leggere i crash) |
+| Privacy policy | Assente | Testo in-app e pagina pubblica (richiesta da Play) da scrivere sui contenuti reali del §13 |
+| Licenze delle dipendenze | `flutter_blue_plus`: **gratuita solo per uso educativo/no-profit**, a pagamento per uso commerciale (nota già nel `pubspec`) | Da risolvere **prima** di una distribuzione commerciale: licenza o sostituzione |
+| Google Play | — | Da verificare: dichiarazione dei permessi SMS (fortemente limitati), dichiarazione del servizio in primo piano con video, `USE_FULL_SCREEN_INTENT`, modulo Data safety, classificazione dei contenuti |
+| Schermate di presentazione | — | Generabili dai golden test, poi rifinite |
+
+**Non pubblico nulla autonomamente.**
+
+---
+
+## 24. Domande aggiuntive (oltre al §16)
+
+9. **Firma**: autorizzi la creazione di una chiave di upload? La creeresti tu
+   (ti guido) e la metteresti nei Secrets del repository. È necessaria per
+   aggiornare l'app senza disinstallarla.
+10. **Package name definitivo** (es. `it.<tuonome>.dynamix`).
+11. **Logo**: preferisci vedere 3 bozze prima della scelta (consigliato)?
+12. **Animazioni**: accetti lo stile illustrato procedurale (§20.1),
+    oppure preferisci asset Rive o Lottie fatti da un designer, che possono
+    rendere personaggi più ricchi ma vanno creati fuori da qui?
+13. **Uso commerciale previsto?** Determina la questione della licenza di
+    `flutter_blue_plus` e il percorso per Google Play.
+14. **Dispositivo reale per i test**: modello e versione Android del telefono
+    che userai, da annotare nel rapporto finale.
