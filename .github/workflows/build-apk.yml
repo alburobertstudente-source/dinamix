@@ -24,6 +24,7 @@ jobs:
             # Fixes for the uploaded archive (already in the source).
             sed -i "s/_listen('Accelerometro'/_listen<Vector3Sample>('Accelerometro'/; s/_listen('Giroscopio'/_listen<Vector3Sample>('Giroscopio'/; s/_listen('Magnetometro'/_listen<Vector3Sample>('Magnetometro'/; s/_listen('Barometro'/_listen<double>('Barometro'/" dinamix_app/lib/ble/transport/phone_transport.dart
             sed -i "s#^import 'package:flutter/rendering.dart';#import 'package:flutter/rendering.dart';\nimport 'package:flutter/services.dart';#" dinamix_app/test/screenshots_test.dart
+            sed -i '/await done;/d; s/await tester.pump();$/await tester.pump(const Duration(seconds: 1));/' dinamix_app/test/screenshots_test.dart
           fi
           if [ -f pubspec.yaml ]; then
             echo "PROJECT_DIR=." >> "$GITHUB_ENV"
@@ -72,8 +73,9 @@ jobs:
       - name: Genera gli screenshot
         id: screenshots
         continue-on-error: true
+        timeout-minutes: 6
         working-directory: ${{ env.PROJECT_DIR }}
-        run: flutter test --update-goldens --dart-define=SCREENSHOTS=true test/screenshots_test.dart
+        run: flutter test --update-goldens --dart-define=SCREENSHOTS=true --timeout=90s test/screenshots_test.dart
 
       - name: Pubblica gli screenshot
         continue-on-error: true
