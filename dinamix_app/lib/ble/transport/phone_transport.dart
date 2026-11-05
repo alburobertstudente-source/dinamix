@@ -11,11 +11,18 @@ import '../protocol/advertising.dart';
 import 'ble_transport.dart';
 
 class Vector3Sample {
-  const Vector3Sample(this.x, this.y, this.z);
+  const Vector3Sample(this.x, this.y, this.z, {this.tUs});
   final double x;
   final double y;
   final double z;
+
+  /// Hardware timestamp of the SensorEvent in µs (sensors_plus), when known.
+  final int? tUs;
 }
+
+/// Raw motion sample in Android units with its hardware timestamp, for the
+/// detection engine (m/s² or rad/s).
+typedef PhoneMotionListener = void Function(bool gyro, int tNs, double x, double y, double z);
 
 /// Motion sensors of the phone, in Android units: m/s², rad/s, µT, hPa.
 abstract class PhoneSensorSource {
@@ -26,17 +33,22 @@ abstract class PhoneSensorSource {
 }
 
 class DevicePhoneSensors implements PhoneSensorSource {
-  static const Duration _fast = Duration(milliseconds: 20);
+  DevicePhoneSensors({this.motionRateHz = 200});
+
+  /// Requested rate: a hint for Android, the real one is measured (§2.2).
+  int motionRateHz;
   static const Duration _slow = Duration(milliseconds: 100);
   static const Duration _ambient = Duration(milliseconds: 500);
 
-  @override
-  Stream<Vector3Sample> accelerometer() => accelerometerEventStream(samplingPeriod: _fast)
-      .map((e) => Vector3Sample(e.x, e.y, e.z));
+  Duration get _fast => Duration(microseconds: (1e6 / motionRateHz).round());
 
   @override
-  Stream<Vector3Sample> gyroscope() =>
-      gyroscopeEventStream(samplingPeriod: _fast).map((e) => Vector3Sample(e.x, e.y, e.z));
+  Stream<Vector3Sample> accelerometer() => accelerometerEventStream(samplingPeriod: _fast)
+      .map((e) => Vector3Sample(e.x, e.y, e.z, tUs: e.timestamp.microsecondsSinceEpoch));
+
+  @override
+  Stream<Vector3Sample> gyroscope() => gyroscopeEventStream(samplingPeriod: _fast)
+      .map((e) => Vector3Sample(e.x, e.y, e.z, tUs: e.timestamp.microsecondsSinceEpoch));
 
   @override
   Stream<Vector3Sample> magnetometer() =>
@@ -63,6 +75,30 @@ class PhoneTransport implements BleTransport {
   static const int _maskPressure = 0x00100000;
 
   final PhoneSensorSource _sensors;
+
+  /// Receives every motion sample at full rate (detection engine).
+  PhoneMotionListener? motionListener;
+
+  /// Rate of the BlueST packets for charts and recordings (decimated).
+  static const double _forwardHz = 50;
+  int _lastAccForwardUs = 0;
+  int _lastGyroForwardUs = 0;
+  final Stopwatch _fallbackClock = Stopwatch()..start();
+
+  PhoneSensorSource get sensors => _sensors;
+
+  int _timeUs(Vector3Sample s) => s.tUs ?? _fallbackClock.elapsedMicroseconds;
+
+  bool _forward(int tUs, bool gyro) {
+    final last = gyro ? _lastGyroForwardUs : _lastAccForwardUs;
+    if (tUs - last < 1e6 / _forwardHz * 0.9 && tUs >= last) return false;
+    if (gyro) {
+      _lastGyroForwardUs = tUs;
+    } else {
+      _lastAccForwardUs = tUs;
+    }
+    return true;
+  }
   final StreamController<LinkState> _link = StreamController<LinkState>.broadcast();
   final StreamController<List<BleScanResult>> _scan =
       StreamController<List<BleScanResult>>.broadcast();
@@ -128,11 +164,17 @@ class PhoneTransport implements BleTransport {
       );
 
   void _onAccelerometer(Vector3Sample s) {
+    final tUs = _timeUs(s);
+    motionListener?.call(false, tUs * 1000, s.x, s.y, s.z);
+    if (s.tUs != null && !_forward(tUs, false)) return;
     final toMg = 1000.0 / standardGravity;
     _emitTriple(_maskAcc, s.x * toMg, s.y * toMg, s.z * toMg);
   }
 
   void _onGyroscope(Vector3Sample s) {
+    final tUs = _timeUs(s);
+    motionListener?.call(true, tUs * 1000, s.x, s.y, s.z);
+    if (s.tUs != null && !_forward(tUs, true)) return;
     // Tenths of dps on the wire, as in BlueST.
     final toTenthDps = 1800.0 / math.pi;
     _emitTriple(_maskGyro, s.x * toTenthDps, s.y * toTenthDps, s.z * toTenthDps);

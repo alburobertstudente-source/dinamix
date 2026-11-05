@@ -21,6 +21,25 @@ class KnownDevice {
       m['id'] as String, m['name'] as String, m['last'] as int, (m['fw'] as String?) ?? '');
 }
 
+/// Detection mode chosen by the user (report §25.7).
+enum DetectionMode {
+  phone('Sensori dello smartphone'),
+  sensorTile('SensorTile STMicroelectronics');
+
+  const DetectionMode(this.label);
+  final String label;
+}
+
+/// Amount of decorative animation (report §20.4).
+enum AnimationLevel {
+  full('Complete'),
+  light('Leggere'),
+  off('Statiche');
+
+  const AnimationLevel(this.label);
+  final String label;
+}
+
 class AppSettings extends ChangeNotifier {
   AppSettings(this._prefs) {
     _load();
@@ -40,6 +59,13 @@ class AppSettings extends ChangeNotifier {
   Set<SensorKind> disabledKinds = {};
   List<KnownDevice> knownDevices = [];
 
+  /// Null until the user has chosen a mode after the registration.
+  DetectionMode? detectionMode;
+  int samplingHz = 200;
+  bool smsDryRun = false;
+  bool developerMode = false;
+  AnimationLevel animationLevel = AnimationLevel.full;
+
   static T _byName<T extends Enum>(List<T> values, String? name, T fallback) {
     for (final v in values) {
       if (v.name == name) return v;
@@ -55,6 +81,12 @@ class AppSettings extends ChangeNotifier {
     highThroughput = _prefs.getBool('high_throughput') ?? true;
     simulationMode = _prefs.getBool('simulation') ?? false;
     impactThresholdG = _prefs.getDouble('impact_g') ?? 4;
+    final mode = _prefs.getString('detection_mode');
+    detectionMode = mode == null ? null : _byName(DetectionMode.values, mode, DetectionMode.phone);
+    samplingHz = _prefs.getInt('sampling_hz') ?? 200;
+    smsDryRun = _prefs.getBool('sms_dry_run') ?? false;
+    developerMode = _prefs.getBool('developer') ?? false;
+    animationLevel = _byName(AnimationLevel.values, _prefs.getString('animations'), AnimationLevel.full);
     units = UnitPrefs(
       acc: _byName(AccUnit.values, _prefs.getString('unit_acc'), AccUnit.mg),
       gyro: _byName(GyroUnit.values, _prefs.getString('unit_gyro'), GyroUnit.dps),
@@ -143,6 +175,44 @@ class AppSettings extends ChangeNotifier {
       disabledKinds.add(kind);
     }
     _prefs.setStringList('disabled_kinds', disabledKinds.map((k) => k.id).toList());
+    notifyListeners();
+  }
+
+  void setDetectionMode(DetectionMode mode) {
+    detectionMode = mode;
+    _prefs.setString('detection_mode', mode.name);
+    notifyListeners();
+  }
+
+  void setSamplingHz(int hz) {
+    samplingHz = hz;
+    _prefs.setInt('sampling_hz', hz);
+    notifyListeners();
+  }
+
+  void setSmsDryRun(bool value) {
+    smsDryRun = value;
+    _prefs.setBool('sms_dry_run', value);
+    notifyListeners();
+  }
+
+  void setDeveloperMode(bool value) {
+    developerMode = value;
+    _prefs.setBool('developer', value);
+    if (!value && simulationMode) setSimulationMode(false);
+    notifyListeners();
+  }
+
+  void setAnimationLevel(AnimationLevel value) {
+    animationLevel = value;
+    _prefs.setString('animations', value.name);
+    notifyListeners();
+  }
+
+  /// Removes the app choices (profile deletion, report §13.1).
+  Future<void> resetOnboarding() async {
+    detectionMode = null;
+    await _prefs.remove('detection_mode');
     notifyListeners();
   }
 
