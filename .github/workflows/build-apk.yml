@@ -1,0 +1,88 @@
+name: Compila APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Scarica il progetto
+        uses: actions/checkout@v7
+
+      # Works with the files in the repository root, in dinamix_app/ or in dinamix_app.zip.
+      - name: Trova la cartella del progetto
+        run: |
+          if [ -f dinamix_app.zip ]; then
+            unzip -q -o dinamix_app.zip
+          fi
+          if [ -f pubspec.yaml ]; then
+            echo "PROJECT_DIR=." >> "$GITHUB_ENV"
+          elif [ -f dinamix_app/pubspec.yaml ]; then
+            echo "PROJECT_DIR=dinamix_app" >> "$GITHUB_ENV"
+          else
+            echo "::error::pubspec.yaml non trovato: i file del progetto non sono stati caricati correttamente."
+            exit 1
+          fi
+
+      - name: Installa Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Installa Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Mostra le versioni
+        run: flutter --version
+
+      - name: Genera i file Android mancanti
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: flutter create --platforms=android --project-name dinamix --org com.dinamix .
+
+      - name: Scarica le dipendenze
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: flutter pub get
+
+      - name: Analisi del codice
+        id: analyze
+        continue-on-error: true
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Esegui i test
+        id: tests
+        continue-on-error: true
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: flutter test
+
+      - name: Compila l'APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: flutter build apk --release
+
+      - name: Rinomina l'APK
+        run: mv "$PROJECT_DIR/build/app/outputs/flutter-apk/app-release.apk" dinamix.apk
+
+      - name: Pubblica l'APK
+        uses: actions/upload-artifact@v7
+        with:
+          path: dinamix.apk
+          archive: false
+          retention-days: 30
+          if-no-files-found: error
+
+      # The APK stays downloadable, but failed checks are never hidden.
+      - name: Esito di analisi e test
+        if: steps.analyze.outcome == 'failure' || steps.tests.outcome == 'failure'
+        run: |
+          echo "::error::APK creato, ma analisi o test non sono passati. Non considerarlo verificato."
+          exit 1
