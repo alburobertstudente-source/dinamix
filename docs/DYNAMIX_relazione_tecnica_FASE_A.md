@@ -36,6 +36,8 @@ o di sicurezza. Nessuna accuratezza è dichiarata, perché nessuna è stata misu
 22. Prestazioni grafiche e separazione dal motore
 23. Preparazione alla distribuzione
 24. Domande aggiuntive (oltre al §16)
+25. Architettura doppia: SensorTile e sensori dello smartphone
+26. Domande sulla modalità SensorTile
 
 ---
 
@@ -1365,3 +1367,216 @@ Regole comuni:
     `flutter_blue_plus` e il percorso per Google Play.
 14. **Dispositivo reale per i test**: modello e versione Android del telefono
     che userai, da annotare nel rapporto finale.
+
+
+---
+
+# Parte III — Architettura doppia
+
+## 25. Architettura doppia: SensorTile e sensori dello smartphone
+
+### 25.1 Cosa esiste già (verificato nel codice)
+
+| Requisito | Stato nel progetto |
+|---|---|
+| Ricerca dispositivi | `DeviceScanner`, con filtro "Solo BlueST" e riconoscimento dall'advertising (company ID `0x0030`, device ID `0x0D` = SensorTile.box PRO, firmware ID dal catalogo ufficiale ST `appconfig`) |
+| Connessione, associazione, riconnessione | `ConnectionManager`: macchina a stati, timeout di 20 s, associazione (`createBond`) se una caratteristica la richiede, riconnessione automatica con backoff esponenziale 1, 2, 4… fino a 30 s |
+| Decodifica | `BlueStDecoder`: accelerometro (mg), giroscopio (0,1 dps), magnetometro, pressione, temperatura, batteria, quaternioni, Eulero, attività, contapassi, QVAR… (`docs/TECHNICAL.md` §6) |
+| Perdita di pacchetti | `PacketLossEstimator`: stima dai salti del timestamp a 16 bit |
+| Batteria e segnale | Funzione batteria (%, V, mA, stato), RSSI ogni 5 s, MTU |
+| Simulatore | `SimulatedTransport`, classe separata, dati marcati `simulated` fino all'export |
+| Prova su hardware | Procedura `docs/HARDWARE_TEST.md` (8 passi, confronto con l'app ST BLE Sensor) |
+
+La Modalità 1 quindi **non va riscritta**: va collegata al motore comune
+(§25.4) e completata nei punti del §25.3.
+
+### 25.2 Modello esatto: cosa è noto e cosa va verificato
+
+Noto dal **data brief** ST (`docs/TECHNICAL.md` §1):
+
+- scheda **STEVAL-MKBOXPRO** (SensorTile.box PRO), MCU STM32U585AI;
+- IMU a 6 assi **LSM6DSV16X** (con Qvar);
+- LIS2DU12 (accelerometro), LIS2MDL (magnetometro), LPS22DF (pressione),
+  STTS22H (temperatura), MP23DB01HP (microfono);
+- BLE con BlueNRG-LP oppure STM32WB07, secondo la revisione.
+
+**Non verificato su una scheda reale** (i manuali UM2496 e UM3133 non erano
+stati consultati). Prima di implementare, si verifica sulla scheda:
+
+| # | Da verificare | Perché conta per il motore | Come |
+|---|---|---|---|
+| V1 | Device ID e firmware ID nell'advertising | Modello e firmware esatti | Schermata Dispositivi (etichette) |
+| V2 | Tabella GATT completa | Quali sensori sono **davvero** esposti | Diagnostica → "Copia rapporto" |
+| V3 | **Quale accelerometro** alimenta la funzione BlueST (LSM6DSV16X o LIS2DU12) | Rumore, fondo scala, banda | Sorgente del firmware (FP-SNS-STBOX1) + prova statica |
+| V4 | **Fondo scala** configurato dal firmware | Saturazione: il pacchetto int16 in mg arriva a ±32,767 g, ma il chip può saturare prima | Sorgente del firmware; urto controllato |
+| V5 | Fondo scala del giroscopio rispetto al formato | Il formato 0,1 dps in int16 si ferma a **±3276,7 dps**: se il chip è configurato oltre, i valori vengono **tagliati dal formato** e non dal sensore | Sorgente del firmware; rotazione veloce controllata |
+| V6 | **Unità del timestamp** (non documentata) | Tempi di campionamento, jerk, Δv | Regressione tick/orologio (§25.5) |
+| V7 | Accelerometro e giroscopio **nello stesso pacchetto**? (2 + 6 + 6 + 6 = 20 byte con il magnetometro: entra esattamente in un pacchetto da 20 byte) | Se sì, sono sincronizzati alla sorgente (vantaggio rispetto al telefono) | Maschera della caratteristica nel rapporto |
+| V8 | **Frequenza effettiva** delle notifiche | Sottocampionamento dei picchi (§8.4): via BLE la frequenza è limitata dall'intervallo di connessione e dal numero di notifiche per intervallo | Misura in Diagnostica a varie distanze |
+| V9 | Orientamento degli assi della scheda e terna destrorsa | Sistema di riferimento | Prova a 6 posizioni + coerenza con il giroscopio (§25.6) |
+| V10 | Perdita di pacchetti in uso (tasca, casco, distanza) | Qualità e buchi | Prova di lunga durata (HARDWARE_TEST §8) |
+| V11 | Comportamento della batteria e durata | Monitoraggio prolungato | Prova di lunga durata |
+
+Finché V1–V9 non sono verificati, i parametri della Modalità 1 restano
+`NON VERIFICATO` nel codice e la UI lo mostra.
+
+**Nessuna funzione BLE viene simulata se il firmware non la offre.** Il
+simulatore attuale espone le funzioni del catalogo. Va **ridotto** alle sole
+funzioni presenti nella tabella GATT reale (V2), appena disponibile un rapporto
+di Diagnostica della scheda.
+
+### 25.3 Lacune della Modalità 1 rispetto alla specifica
+
+1. **Timestamp**: oggi si usa l'ora di ricezione, e i tick servono solo a
+   stimare le perdite. Serve la ricostruzione del tempo di campionamento
+   (§25.5).
+2. **Qualità del collegamento** come ingresso del motore: perdite, RSSI,
+   frequenza misurata e jitter entrano in Q (§11.6).
+3. **Batteria della scheda**: avviso di batteria bassa e previsione di
+   interruzione in dashboard.
+4. **Collegamento perso durante o subito dopo un evento**: senza la fase
+   post-evento il livello non può essere confermato. L'evento viene salvato
+   con "collegamento perso dopo l'evento", con la categoria **incerto** al
+   livello calcolato fino a quel punto. La perdita del collegamento da sola
+   non alza il livello: il motivo più comune è la distanza, non un incidente.
+   Da confermare (§26).
+5. **Servizio in primo piano**: in questa modalità il tipo `connectedDevice`
+   è quello corretto (nella Modalità 2 serve `health`, §15.3).
+
+Possibile estensione futura, da valutare dopo V3–V8: l'LSM6DSV16X ha
+rilevamento integrato di caduta libera e risveglio, e il firmware Datalog2
+registra ad alta frequenza su scheda SD. Il primo non sarebbe limitato dalla
+banda BLE. Il secondo è lo strumento ideale per raccogliere **dati di
+riferimento ad alta frequenza** per la validazione (§14.3). Entrambi richiedono
+firmware o funzioni (PnPL, MLC/FSM) oggi non decodificati dall'app.
+
+### 25.4 Motore comune e formato normalizzato
+
+Un solo `DetectionEngine` (§15.1). Le sorgenti producono lo stesso
+`MotionSample`:
+
+```
+MotionSample {
+  sourceId      // es. "sensortile:<MAC>", "phone", "sim:<scenario>", "replay:<sessione>"
+  kind          // acc | gyro | mag | pressure | quat | gps
+  tNs           // tempo di campionamento stimato, sull'orologio monotono del telefono
+  tSigmaNs      // incertezza del tempo (hardware: piccola; BLE: dalla regressione §25.5)
+  x, y, z       // unità SI: m/s², rad/s, µT; nel riferimento della sorgente
+  flags         // saturato, buco precedente, interpolato, timestamp di ricezione
+}
+
+SourceDescriptor {
+  mode          // sensortile | phone | simulated | replay
+  model, firmware, sensors[] { tipo, fondo scala, risoluzione, frequenza nominale }
+  measuredRateHz, jitter, packetLoss, battery, rssi
+  frame         // matrice R_sorgente→B_std (convenzione comune: terna destrorsa x, y, z)
+  calibration   // bias, scala, g_cal, rumore misurato (§14.2), parametri NON VERIFICATO/verificato
+  placement     // tasca, mano, manubrio, casco, cintura (scelto dall'utente)
+  timestampQuality // hardware | ricostruito | ricezione
+}
+```
+
+- **Unità**: la conversione da BlueST (mg, 0,1 dps, mGa) a SI avviene
+  nell'adattatore, una volta sola.
+- **Riferimento**: ogni sorgente dichiara la sua R verso la convenzione
+  comune. Il motore lavora solo nella convenzione comune e nei riferimenti W e V
+  (§3.1).
+- **Calibrazioni specifiche** (stesso algoritmo, parametri diversi):
+  rumore e bias (dalla caratterizzazione §14.2 di **ciascun** hardware),
+  fondo scala e soglia di saturazione, r_max del braccio di leva (§9.1: la
+  scheda è più piccola del telefono), frequenza attesa, linee di base e Σ
+  **per coppia (sorgente, posizione, attività)**.
+
+Le firme degli eventi dipendono dalla **posizione**: per un sensore sul casco
+le categorie "caduta del telefono dal tavolo" e "persona caduta" diventano
+"casco caduto da solo" e "urto con la testa", con la stessa ambiguità di
+principio (§9.4). Le regole sono comuni; le categorie mostrate e i parametri
+dipendono dalla posizione dichiarata.
+
+### 25.5 Ricostruzione del tempo per i dati BLE
+
+Ogni pacchetto porta un tick a 16 bit di unità ignota (V6), mentre il telefono
+registra l'istante di ricezione r_i.
+
+1. **Srotolamento**: k_i = k_{i−1} + ((raw_i − raw_{i−1}) mod 65536). Dopo una
+   pausa lunga il numero di giri n si stima con la ricezione:
+   n = round(((r_i − r_{i−1})/b̂ − Δraw) / 65536).
+2. **Modello**: r_i = a + b·k_i + L_i, dove L_i ≥ L_min è la latenza (BLE,
+   pila Android, canale piattaforma): sempre positiva e variabile.
+3. **Stima di a e b**: poiché la latenza è sempre ≥ 0, la retta corretta è
+   l'**inviluppo inferiore** dei punti (k_i, r_i), non la retta dei minimi
+   quadrati, che sarebbe spostata dalla latenza media. Si stima con
+   programmazione lineare: min Σ(r_i − a − b k_i) con r_i ≥ a + b k_i, cioè il
+   metodo classico della stima della deriva in sincronizzazione a una via.
+   Si usa una finestra mobile, per seguire la deriva dei due quarzi.
+4. **Risultati**:
+   - tempo di campionamento t_i = a + b·k_i, privo del jitter di ricezione;
+   - **periodo del tick** b, che dà l'unità del timestamp (risolve V6 per misura);
+   - frequenza effettiva;
+   - incertezza tSigma dalla dispersione residua;
+   - buchi esatti dai salti di k (sostituisce la stima di `PacketLossEstimator`).
+5. **Validazione**: con il simulatore (latenze sintetiche note) e sulla scheda
+   reale, confrontando la stima di b con la frequenza nominale del firmware.
+
+Sul telefono questo passo non serve: i timestamp sono hardware (§2).
+
+### 25.6 Calibrazione all'avvio della sessione
+
+- **Quiete iniziale** di 3–5 s (guidata dall'interfaccia): g_cal, bias del
+  giroscopio, rumore effettivo e orientamento della gravità nella sorgente.
+  Serve per il riferimento W e per riconoscere la posizione (es. casco
+  dritto).
+- **Controllo di coerenza degli assi** (V9): durante una rotazione, la
+  variazione della gravità misurata dall'accelerometro deve coincidere con
+  l'integrale del giroscopio, Δγ ≈ −∫ ω × γ dt. Se c'è un segno invertito o
+  una permutazione degli assi, l'errore è grande e l'app lo segnala. È un test
+  automatico, eseguibile anche sui dati del simulatore.
+
+### 25.7 Interfaccia
+
+- **Scelta della modalità**: dopo la registrazione, una schermata con due
+  schede grandi:
+  1. **SensorTile STMicroelectronics**, collegamento Bluetooth;
+  2. **Sensori dello smartphone**.
+
+  Per ciascuna sono indicati requisiti e disponibilità rilevata (Bluetooth
+  presente? Sensori del telefono presenti? §2.8). Modificabile dalle
+  impostazioni, ma **non durante una registrazione o un allarme** (regola già
+  presente per le registrazioni).
+- **Modalità attiva sempre visibile**: badge in dashboard e in diagnostica.
+  - SensorTile: stato del collegamento, batteria, RSSI, perdite, frequenza.
+  - Telefono: sensori presenti, mancanti e degradati.
+- **Simulazione**: una terza modalità **solo nelle opzioni sviluppatore**, con
+  banner permanente "SIMULAZIONE", dati marcati `simulated` fino all'export,
+  e **SMS sempre in `DryRun`**: con una sorgente simulata l'invio reale è
+  bloccato nel codice, non solo nella UI.
+- La scelta della modalità **non** cambia regole e livelli: cambiano solo i
+  parametri di calibrazione e le categorie legate alla posizione (§25.4).
+
+### 25.8 Test specifici
+
+- **Adattatori**: pacchetti BlueST reali catturati da Diagnostica (quando
+  disponibili) usati come dati di test con i valori attesi in SI; eventi del
+  telefono iniettati.
+- **Equivalenza del motore**: lo stesso scenario simulato, generato come
+  sorgente telefono e come sorgente SensorTile (con le rispettive frequenze,
+  rumori e latenze), deve dare la stessa categoria. Le differenze ammesse
+  sono solo quelle spiegate dalla qualità diversa.
+- **Ricostruzione del tempo**: latenze sintetiche, deriva dei quarzi,
+  azzeramenti del contatore, pause lunghe.
+- **Disconnessioni durante un evento**: categoria "incerto" e nessun crash.
+
+---
+
+## 26. Domande sulla modalità SensorTile
+
+15. **Hai la scheda ora?** Mi serve il "Copia rapporto" della Diagnostica
+    dopo una connessione (V1, V2, V7) e, se possibile, una registrazione
+    esportata di 1 minuto con la scheda ferma e poi ruotata (V6, V8, V9).
+16. **Dove verrà indossata** la SensorTile (casco, cintura, zaino, bici)?
+    Determina categorie e parametri (§25.4).
+17. **Firmware**: è quello di fabbrica? Lo identifico dall'advertising (V1).
+    Un firmware diverso, come Datalog2 per la raccolta dei dati, è
+    accettabile?
+18. **Collegamento perso dopo un urto**: confermi la proposta del §25.3.4
+    (evento incerto, nessun aumento automatico del livello)?
