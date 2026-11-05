@@ -13,3 +13,5 @@ android/app/profile/
 android/app/release/
 android/*.jks
 android/key.properties
+test/screenshots/
+test/failures/

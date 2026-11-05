@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -5,6 +6,7 @@ import 'package:dinamix/app/dinamix_app.dart';
 import 'package:dinamix/app/services.dart';
 import 'package:dinamix/ble/connection_manager.dart';
 import 'package:dinamix/ble/device_scanner.dart';
+import 'package:dinamix/ble/transport/phone_transport.dart';
 import 'package:dinamix/ble/transport/simulated_transport.dart';
 import 'package:dinamix/core/keep_alive.dart';
 import 'package:dinamix/data/session_recorder.dart';
@@ -12,7 +14,14 @@ import 'package:dinamix/domain/sensor_kind.dart';
 import 'package:dinamix/session/live_session.dart';
 import 'package:dinamix/settings/app_settings.dart';
 import 'package:dinamix/ui/screens/activity_screen.dart';
-import 'package:dinamix/ui/screens/home_screen.dart';
+import 'package:dinamix/alert/alert_manager.dart';
+import 'package:dinamix/monitoring/monitoring_service.dart';
+import 'package:dinamix/profile/profile.dart';
+import 'package:dinamix/ui/screens/detection/alarm_overlay.dart';
+import 'package:dinamix/ui/screens/detection/dashboard_screen.dart';
+import 'package:dinamix/ui/screens/detection/detection_screen.dart';
+import 'package:dinamix/ui/screens/onboarding/mode_screen.dart';
+import 'package:dinamix/ui/screens/onboarding/registration_screen.dart';
 import 'package:dinamix/ui/screens/live_screen.dart';
 import 'package:dinamix/ui/screens/session_screen.dart';
 import 'package:dinamix/ui/screens/summary_screen.dart';
@@ -48,6 +57,17 @@ Future<void> _loadFonts() async {
   await icons.load();
 }
 
+class _NoSensors implements PhoneSensorSource {
+  @override
+  Stream<Vector3Sample> accelerometer() => const Stream.empty();
+  @override
+  Stream<Vector3Sample> gyroscope() => const Stream.empty();
+  @override
+  Stream<Vector3Sample> magnetometer() => const Stream.empty();
+  @override
+  Stream<double> barometer() => const Stream.empty();
+}
+
 void main() {
   late AppServices services;
 
@@ -56,13 +76,15 @@ void main() {
   });
 
   setUp(() async {
-    SharedPreferences.setMockInitialValues({'simulation': true});
+    SharedPreferences.setMockInitialValues({'simulation': true, 'detection_mode': 'phone'});
     final prefs = await SharedPreferences.getInstance();
     services = await AppServices.create(
       settings: AppSettings(prefs),
       store: MemorySessionStore(),
       keepAlive: NoopKeepAlive(),
+      phoneSensors: _NoSensors(),
     );
+    await services.profiles.saveProfile(const UserProfile(firstName: 'Giulia', lastName: 'Rossi', age: 17));
   });
 
   tearDown(() => services.hub.dispose());
@@ -75,13 +97,16 @@ void main() {
           ChangeNotifierProvider<DeviceScanner>.value(value: services.scanner),
           ChangeNotifierProvider<SessionRecorder>.value(value: services.recorder),
           ChangeNotifierProvider<NavController>(create: (_) => NavController()),
+          ChangeNotifierProvider<ProfileService>.value(value: services.profiles),
+          ChangeNotifierProvider<MonitoringService>.value(value: services.monitoring),
+          ChangeNotifierProvider<AlertManager>.value(value: services.alerts),
         ],
         child: MaterialApp(
           debugShowCheckedModeBanner: false,
           theme: buildTheme(Brightness.dark),
           builder: (context, child) => Stack(
             fit: StackFit.expand,
-            children: [const AuroraBackground(), if (child != null) child],
+            children: [const AuroraBackground(), if (child != null) child, const AlarmOverlay()],
           ),
           home: home,
         ),
@@ -131,7 +156,28 @@ void main() {
   }
 
   testWidgets('home', skip: !_enabled, (tester) async {
-    await shot(tester, 'home', const HomeScreen());
+    await shot(tester, 'home', const DashboardScreen());
+  });
+
+  testWidgets('registrazione', skip: !_enabled, (tester) async {
+    await services.profiles.deleteAll();
+    await shot(tester, 'registration', const RegistrationScreen());
+  });
+
+  testWidgets('modalita', skip: !_enabled, (tester) async {
+    await shot(tester, 'mode', const ModeScreen(onboarding: true));
+  });
+
+  testWidgets('diagnostica rilevamento', skip: !_enabled, (tester) async {
+    await shot(tester, 'detection', const DetectionScreen());
+  });
+
+  testWidgets('allarme', skip: !_enabled, (tester) async {
+    await shot(tester, 'alarm', const DashboardScreen(), before: () async {
+      await services.alerts.trigger(
+          detectionId: 99, title: 'Possibile caduta della persona', detail: 'Livello 3 · confidenza 62/100', dryRun: true);
+    });
+    await services.alerts.cancel();
   });
 
   testWidgets('attivita', skip: !_enabled, (tester) async {
@@ -155,6 +201,8 @@ void main() {
       'session',
       SessionScreen(activity: RideActivity.mountainBike, controller: session, record: false),
     );
+    // The session screen starts the monitoring: stop it (and its UI ticker).
+    unawaited(services.monitoring.stop());
     await disconnect(tester);
   });
 

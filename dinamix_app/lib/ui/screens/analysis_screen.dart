@@ -215,6 +215,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 DropdownButtonFormField<int>(
                   key: ValueKey('session-${session?.id}'),
                   isExpanded: true,
+                  // ignore: deprecated_member_use, the selection changes from outside the field.
                   value: session?.id,
                   decoration: const InputDecoration(labelText: 'Sessione'),
                   items: [
@@ -242,6 +243,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                         child: DropdownButtonFormField<SensorKind>(
                           key: ValueKey('kind-${session.id}-$_kind'),
                           isExpanded: true,
+                          // ignore: deprecated_member_use, the selection changes from outside the field.
                           value: _kind,
                           decoration: const InputDecoration(labelText: 'Sensore'),
                           items: [
@@ -258,6 +260,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                         child: DropdownButtonFormField<String>(
                           key: ValueKey('cmp-${session.id}-$_compareKind-$_compareChannel'),
                           isExpanded: true,
+                          // ignore: deprecated_member_use, the selection changes from outside the field.
                           value: _compareKind == null ? 'none' : '${_compareKind!.id}/$_compareChannel',
                           decoration: const InputDecoration(labelText: 'Confronta con'),
                           items: [

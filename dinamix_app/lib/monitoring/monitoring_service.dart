@@ -103,7 +103,8 @@ class MonitoringService extends ChangeNotifier {
     startedAt = DateTime.now();
     _ticker = Timer.periodic(const Duration(milliseconds: 250), (_) => notifyListeners());
     try {
-      await keepAlive.start('DYNAMIX: monitoraggio attivo');
+      await keepAlive.start('DYNAMIX: monitoraggio attivo',
+          sensorsOnly: connection.dataSource == DataSource.phone);
       _ownsKeepAlive = true;
     } catch (_) {}
     logger.i('Monitoraggio', 'Avviato: ${engine.profile.name}, ${settings.samplingHz} Hz richiesti');

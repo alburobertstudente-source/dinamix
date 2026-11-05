@@ -6,8 +6,13 @@ import '../../ble/connection_manager.dart';
 import '../../data/session_recorder.dart';
 import '../../domain/units.dart';
 import '../../settings/app_settings.dart';
+import '../../profile/profile.dart';
 import '../widgets/common.dart';
+import 'detection/about_screen.dart';
+import 'detection/contact_screen.dart';
 import 'diagnostics_screen.dart';
+import 'onboarding/mode_screen.dart';
+import 'onboarding/registration_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -28,6 +33,67 @@ class SettingsScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
         children: [
+          const SectionTitle('Profilo'),
+          Card(
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.person_outline),
+                  title: Text(context.watch<ProfileService>().profile?.fullName ?? 'Profilo'),
+                  subtitle: Text('Età ${context.watch<ProfileService>().profile?.age ?? '—'} · modifica'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(builder: (_) => const RegistrationScreen(editing: true))),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.contact_phone_outlined),
+                  title: const Text('Emergency Contact'),
+                  subtitle: Text(context.watch<ProfileService>().contactReady
+                      ? context.watch<ProfileService>().contact!.name
+                      : 'Non configurato'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context)
+                      .push(MaterialPageRoute<void>(builder: (_) => const ContactScreen())),
+                ),
+              ],
+            ),
+          ),
+          const SectionTitle('Rilevamento'),
+          Card(
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.swap_horiz_rounded),
+                  title: const Text('Modalità'),
+                  subtitle: Text((settings.detectionMode ?? DetectionMode.phone).label),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context)
+                      .push(MaterialPageRoute<void>(builder: (_) => const ModeScreen())),
+                ),
+                _Choice<int>(
+                  title: 'Campionamento richiesto (telefono)',
+                  value: settings.samplingHz,
+                  options: const {50: '50 Hz', 100: '100 Hz', 200: '200 Hz'},
+                  onChanged: settings.setSamplingHz,
+                ),
+                SwitchListTile(
+                  title: const Text('Modalità prova SMS'),
+                  subtitle: const Text('L\'allarme funziona, ma nessun SMS viene inviato'),
+                  value: settings.smsDryRun,
+                  onChanged: settings.setSmsDryRun,
+                ),
+              ],
+            ),
+          ),
+          const SectionTitle('Animazioni'),
+          Card(
+            child: _Choice<AnimationLevel>(
+              title: 'Scena e animazioni',
+              value: settings.animationLevel,
+              options: {for (final l in AnimationLevel.values) l: l.label},
+              onChanged: settings.setAnimationLevel,
+            ),
+          ),
           const SectionTitle('Bluetooth'),
           Card(
             child: Column(
@@ -185,13 +251,20 @@ class SettingsScreen extends StatelessWidget {
             child: Column(
               children: [
                 SwitchListTile(
-                  title: const Text('Modalità simulazione'),
-                  subtitle: Text(recorder.isActive
-                      ? 'Non modificabile durante una registrazione'
-                      : 'Solo per provare l\'interfaccia senza la scheda. Disconnette il dispositivo.'),
-                  value: settings.simulationMode,
-                  onChanged: recorder.isActive ? null : services.setSimulationMode,
+                  title: const Text('Opzioni sviluppatore'),
+                  subtitle: const Text('Mostra la sorgente simulata (dati marcati come simulati, mai SMS reali)'),
+                  value: settings.developerMode,
+                  onChanged: settings.setDeveloperMode,
                 ),
+                if (settings.developerMode)
+                  SwitchListTile(
+                    title: const Text('Sorgente BLE simulata'),
+                    subtitle: Text(recorder.isActive
+                        ? 'Non modificabile durante una registrazione'
+                        : 'Solo per provare l\'interfaccia senza la scheda. Disconnette il dispositivo.'),
+                    value: settings.simulationMode,
+                    onChanged: recorder.isActive ? null : services.setSimulationMode,
+                  ),
                 ListTile(
                   leading: const Icon(Icons.troubleshoot),
                   title: const Text('Diagnostica'),
@@ -203,7 +276,25 @@ class SettingsScreen extends StatelessWidget {
             ),
           ),
           const SectionTitle('Applicazione'),
-          const Card(child: _Info('Versione', appVersion)),
+          Card(
+            child: Column(
+              children: [
+                const _Info('Versione', appVersion),
+                ListTile(
+                  leading: const Icon(Icons.info_outline_rounded),
+                  title: const Text('Informazioni, privacy e limiti'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context)
+                      .push(MaterialPageRoute<void>(builder: (_) => const AboutScreen())),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.person_remove_outlined, color: Colors.redAccent),
+                  title: const Text('Cancella profilo e dati personali'),
+                  onTap: () => _confirmDeleteProfile(context, services),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -224,6 +315,40 @@ class SettingsScreen extends StatelessWidget {
         temp: temp ?? u.temp,
         pressure: pressure ?? u.pressure,
       );
+
+  Future<void> _confirmDeleteProfile(BuildContext context, AppServices services) async {
+    var alsoData = false;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('Cancellare il profilo?'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Vengono eliminati nome, cognome, età e contatto di emergenza. '
+                  'Al prossimo avvio verrà chiesta una nuova registrazione.'),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: alsoData,
+                onChanged: (v) => setState(() => alsoData = v ?? false),
+                title: const Text('Elimina anche eventi e registrazioni'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Annulla')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Cancella')),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    final navigator = Navigator.of(context);
+    await services.deleteProfile(alsoData: alsoData);
+    navigator.popUntil((r) => r.isFirst);
+  }
 
   Future<void> _confirmDeleteAll(BuildContext context, AppServices services) async {
     final confirmed = await showDialog<bool>(

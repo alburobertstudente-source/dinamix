@@ -1,6 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
+    <!-- Not required: the app also works with the phone sensors only. -->
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
 
     <!-- Android 12+: permessi Bluetooth dedicati, nessuna localizzazione. -->
     <uses-permission
@@ -19,9 +20,21 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Phone-only monitoring on Android 14+: "health" foreground service, enabled by
+         HIGH_SAMPLING_RATE_SENSORS (also allows sampling above 200 Hz). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH" />
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
+
+    <!-- Alert: vibration and the SMS to the emergency contact (asked only when it is enabled). -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
+    <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
+    <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="false" />
 
     <application
-        android:label="DinamiX"
+        android:label="DYNAMIX"
+        android:allowBackup="false"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -45,7 +58,7 @@
         <service
             android:name=".RecordingService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
+            android:foregroundServiceType="connectedDevice|health" />
 
         <meta-data
             android:name="flutterEmbedding"

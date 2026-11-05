@@ -1,3 +1,4 @@
+// ignore_for_file: avoid_print
 import 'package:dinamix/sensing/motion_sample.dart';
 import 'package:dinamix/sensing/simulation/physics_simulator.dart';
 import 'package:dinamix/sensing/simulation/scenarios.dart';

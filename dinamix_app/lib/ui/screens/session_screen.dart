@@ -1,7 +1,6 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../app/services.dart';
@@ -36,16 +35,11 @@ class _SessionScreenState extends State<SessionScreen> with TickerProviderStateM
   late final LiveSessionController _session;
   late final AnimationController _frame =
       AnimationController(vsync: this, duration: const Duration(seconds: 1))..repeat();
-  late final AnimationController _alert =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
   late final ConnectionManager _connection;
   final Stopwatch _elapsed = Stopwatch()..start();
 
   bool _ownsRecording = false;
   bool _finishing = false;
-  double _alertG = 0;
-  bool _alertIsTest = false;
-  bool _alertVisible = false;
 
   // Values smoothed on screen frames, independent from the sensor rate.
   double _pitch = 0;
@@ -60,7 +54,17 @@ class _SessionScreenState extends State<SessionScreen> with TickerProviderStateM
     _connection = services.connection;
     _session = widget.controller ??
         LiveSessionController(impactThresholdG: services.settings.impactThresholdG);
-    _session.onImpact = (g) => _showAlert(g, test: false);
+    // Danger is decided by the shared detection engine (MonitoringService), not
+    // by a threshold on the raw magnitude: this screen only shows the motion.
+    _session.onImpact = null;
+    final monitoring = services.monitoring;
+    if (!monitoring.running) {
+      services.startMonitoring().then((error) {
+        if (error != null && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
+        }
+      });
+    }
     _connection.addSink(_session);
     _frame.addListener(_tick);
     if (widget.record && !services.recorder.isActive) {
@@ -86,18 +90,6 @@ class _SessionScreenState extends State<SessionScreen> with TickerProviderStateM
     _spin += 0.004 + math.min(s.rotationDps, 720) / 720 * 0.09;
   }
 
-  void _showAlert(double g, {required bool test}) {
-    if (!mounted || _alertVisible) return;
-    HapticFeedback.heavyImpact();
-    setState(() {
-      _alertG = g;
-      _alertIsTest = test;
-      _alertVisible = true;
-    });
-    _alert.forward(from: 0);
-  }
-
-  void _dismissAlert() => setState(() => _alertVisible = false);
 
   Future<void> _finish() async {
     if (_finishing) return;
@@ -130,7 +122,6 @@ class _SessionScreenState extends State<SessionScreen> with TickerProviderStateM
     _connection.removeSink(_session);
     _session.onImpact = null;
     _frame.dispose();
-    _alert.dispose();
     super.dispose();
   }
 
@@ -164,15 +155,6 @@ class _SessionScreenState extends State<SessionScreen> with TickerProviderStateM
                 ),
               ),
             ),
-            if (_alertVisible)
-              Positioned.fill(
-                child: _ImpactAlert(
-                  animation: _alert,
-                  g: _alertG,
-                  test: _alertIsTest,
-                  onDismiss: _dismissAlert,
-                ),
-              ),
           ],
         ),
       ),
@@ -300,7 +282,12 @@ class _SessionScreenState extends State<SessionScreen> with TickerProviderStateM
           onPressed: _finish,
         ),
         TextButton(
-          onPressed: () => _showAlert(thresholdG, test: true),
+          onPressed: () => context.read<AppServices>().alerts.trigger(
+                detectionId: -DateTime.now().millisecondsSinceEpoch,
+                title: 'Prova dell\'allarme',
+                detail: 'Nessun SMS verrà inviato',
+                dryRun: true,
+              ),
           child: Text('Prova avviso (test)', style: TextStyle(color: muted, fontSize: 13)),
         ),
       ],
@@ -547,88 +534,4 @@ class _SparklinePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _SparklinePainter old) => true;
-}
-
-class _ImpactAlert extends StatelessWidget {
-  const _ImpactAlert({
-    required this.animation,
-    required this.g,
-    required this.test,
-    required this.onDismiss,
-  });
-
-  final Animation<double> animation;
-  final double g;
-  final bool test;
-  final VoidCallback onDismiss;
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: animation,
-      builder: (context, child) {
-        final v = animation.value;
-        final shake = math.sin(v * math.pi * 7) * (1 - v) * 16;
-        return Stack(
-          fit: StackFit.expand,
-          children: [
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: RadialGradient(
-                  colors: [
-                    Palette.danger.withValues(alpha: 0.28 * v),
-                    Colors.black.withValues(alpha: 0.88 * v),
-                  ],
-                ),
-              ),
-            ),
-            Center(
-              child: Transform.translate(
-                offset: Offset(shake, 0),
-                child: Transform.scale(
-                  scale: Curves.easeOutBack.transform(v.clamp(0.0, 1.0)),
-                  child: child,
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Card(
-          color: const Color(0xF2170B10),
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.warning_amber_rounded, color: Palette.danger, size: 60),
-                const SizedBox(height: 12),
-                Text(
-                  test ? 'Prova avviso' : 'Picco rilevato',
-                  style: const TextStyle(
-                      color: Colors.white, fontSize: 25, fontWeight: FontWeight.w800),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  test ? 'Nessun dato è stato registrato come picco.' : '${g.toStringAsFixed(1)} g oltre la soglia',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white),
-                ),
-                const SizedBox(height: 10),
-                const Text(
-                  'Funzione sperimentale: non è un sistema di sicurezza e non chiama i soccorsi.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.white70, fontSize: 12),
-                ),
-                const SizedBox(height: 20),
-                GradientButton(label: 'Sto bene', onPressed: onDismiss),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }

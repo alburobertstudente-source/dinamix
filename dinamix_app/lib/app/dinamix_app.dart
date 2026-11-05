@@ -10,7 +10,14 @@ import '../data/session_recorder.dart';
 import '../settings/app_settings.dart';
 import '../ui/screens/analysis_screen.dart';
 import '../ui/screens/devices_screen.dart';
-import '../ui/screens/home_screen.dart';
+import '../alert/alert_manager.dart';
+import '../monitoring/monitoring_service.dart';
+import '../profile/profile.dart';
+import '../ui/screens/detection/alarm_overlay.dart';
+import '../ui/screens/detection/dashboard_screen.dart';
+import '../ui/screens/onboarding/mode_screen.dart';
+import '../ui/screens/onboarding/registration_screen.dart';
+import '../ui/screens/onboarding/splash_screen.dart';
 import '../ui/screens/live_screen.dart';
 import '../ui/screens/logger_screen.dart';
 import '../ui/theme.dart';
@@ -100,10 +107,13 @@ class _DinamixAppState extends State<DinamixApp> with WidgetsBindingObserver {
         ChangeNotifierProvider<DeviceScanner>.value(value: services.scanner),
         ChangeNotifierProvider<SessionRecorder>.value(value: services.recorder),
         ChangeNotifierProvider<NavController>.value(value: _nav),
+        ChangeNotifierProvider<ProfileService>.value(value: services.profiles),
+        ChangeNotifierProvider<MonitoringService>.value(value: services.monitoring),
+        ChangeNotifierProvider<AlertManager>.value(value: services.alerts),
       ],
       child: Consumer<AppSettings>(
         builder: (context, settings, _) => MaterialApp(
-          title: 'DinamiX',
+          title: 'DYNAMIX',
           debugShowCheckedModeBanner: false,
           scaffoldMessengerKey: _messenger,
           theme: buildTheme(Brightness.light),
@@ -114,12 +124,47 @@ class _DinamixAppState extends State<DinamixApp> with WidgetsBindingObserver {
             children: [
               const AuroraBackground(),
               if (child != null) child,
-              const IntroOverlay(),
+              const AlarmOverlay(),
             ],
           ),
-          home: const AppShell(),
+          home: const AppRoot(),
         ),
       ),
+    );
+  }
+}
+
+/// First launch: splash → registration → mode choice → app (specification §1).
+class AppRoot extends StatefulWidget {
+  const AppRoot({super.key, this.showSplash = true});
+
+  final bool showSplash;
+
+  @override
+  State<AppRoot> createState() => _AppRootState();
+}
+
+class _AppRootState extends State<AppRoot> {
+  late bool _splash = widget.showSplash;
+
+  @override
+  Widget build(BuildContext context) {
+    final profiles = context.watch<ProfileService>();
+    final mode = context.select<AppSettings, DetectionMode?>((s) => s.detectionMode);
+    final Widget page;
+    if (_splash || !profiles.loaded) {
+      page = SplashScreen(key: const ValueKey('splash'), onDone: () => setState(() => _splash = false));
+    } else if (!profiles.registered) {
+      page = const RegistrationScreen(key: ValueKey('register'));
+    } else if (mode == null) {
+      page = const ModeScreen(key: ValueKey('mode'), onboarding: true);
+    } else {
+      page = const AppShell(key: ValueKey('shell'));
+    }
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 380),
+      switchInCurve: Curves.easeOutCubic,
+      child: page,
     );
   }
 }
@@ -149,7 +194,7 @@ class AppShell extends StatelessWidget {
                 child: IndexedStack(
                   index: nav.index,
                   children: const [
-                    HomeScreen(),
+                    DashboardScreen(),
                     DevicesScreen(),
                     LiveScreen(),
                     AnalysisScreen(),

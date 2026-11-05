@@ -18,16 +18,17 @@ Future<int?> androidSdkInt() async {
 /// Keeps the process alive during long recordings through the native
 /// foreground service (see android/.../RecordingService.kt).
 abstract class KeepAlive {
-  Future<void> start(String title);
+  /// [sensorsOnly]: phone sensors without a BLE device ("health" service type).
+  Future<void> start(String title, {bool sensorsOnly = false});
   Future<void> stop();
 }
 
 class AndroidKeepAlive implements KeepAlive {
   @override
-  Future<void> start(String title) async {
+  Future<void> start(String title, {bool sensorsOnly = false}) async {
     try {
       await Permission.notification.request();
-      await _platformChannel.invokeMethod<void>('start', {'title': title});
+      await _platformChannel.invokeMethod<void>('start', {'title': title, 'sensorsOnly': sensorsOnly});
     } catch (e) {
       // Recording still works in foreground: warn, never fail the session.
       logger.w('KeepAlive', 'Servizio in primo piano non avviato: $e');
@@ -46,7 +47,7 @@ class AndroidKeepAlive implements KeepAlive {
 
 class NoopKeepAlive implements KeepAlive {
   @override
-  Future<void> start(String title) async {}
+  Future<void> start(String title, {bool sensorsOnly = false}) async {}
 
   @override
   Future<void> stop() async {}
