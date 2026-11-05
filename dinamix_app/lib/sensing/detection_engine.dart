@@ -204,7 +204,15 @@ class DetectionEngine {
     return now - e.features.endS < 30 ? e.level : DangerLevel.normal;
   }
 
+  /// Non-finite samples (sensor glitch, corrupted packet) are dropped and
+  /// counted: one NaN would otherwise poison the attitude for ever.
+  int rejectedSamples = 0;
+
   void ingest(MotionSample s) {
+    if (!s.v.isFinite) {
+      rejectedSamples++;
+      return;
+    }
     switch (s.kind) {
       case SampleKind.gyro:
         orientation.onGyro(s.tNs, s.v);
@@ -448,6 +456,10 @@ class DetectionEngine {
     }
     return event;
   }
+
+  /// Sizes of the internal buffers, for the long-duration test (bounded memory).
+  ({int pre, int event, int post, int gps}) get bufferSizes =>
+      (pre: _pre.length, event: _event.length, post: _post.length, gps: _gps.length);
 
   /// The pending provisional event, if an episode is still in its post phase.
   DetectionEvent? get pendingProvisional => _provisional;

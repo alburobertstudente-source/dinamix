@@ -1,14 +1,30 @@
-# DinamiX
+# DYNAMIX
 
-App Android (Flutter) per ricevere, visualizzare, registrare ed esportare i dati di una
-**SensorTile.box PRO (STEVAL-MKBOXPRO)** via Bluetooth Low Energy, con il protocollo ST **BlueST**.
+App Android (Flutter) che analizza il movimento con i **sensori dello smartphone** oppure con una
+**SensorTile.box PRO (STEVAL-MKBOXPRO)** via Bluetooth Low Energy, riconosce gli urti potenzialmente
+pericolosi e, se l'utente non annulla l'allarme entro 60 secondi, invia un SMS al contatto di emergenza.
 
 Fa parte del project work DinamiX: monitoraggio delle sollecitazioni meccaniche su caschi per sci,
 mountain bike e arrampicata.
 
-> **Stato di verifica.** L'APK è stato compilato su GitHub Actions con Flutter 3.47 e tutti gli 87 test automatici
-> sono passati. L'app **non è ancora stata provata su un telefono né con la SensorTile.box PRO**: il passo
-> successivo è la [prova su hardware](docs/HARDWARE_TEST.md).
+> **Stato di verifica.** Motore di rilevamento, allarme e interfaccia sono verificati con i test automatici
+> e con un simulatore fisico (`docs/VALIDAZIONE_SIMULAZIONE.md`). **Non sono stati validati su dati reali:**
+> soglie provvisorie (`docs/SOGLIE.md`), nessuna accuratezza dichiarata. DYNAMIX non è un dispositivo
+> medico né un sistema di sicurezza certificato. Cosa è stato verificato e dove: `docs/QA_RAPPORTO.md`.
+
+## Documenti
+
+| Documento | Contenuto |
+|---|---|
+| `../docs/DYNAMIX_relazione_tecnica_FASE_A.md` | Studio: fisica, matematica, architettura, limiti |
+| `docs/SOGLIE.md` | Formule e soglie provvisorie con il loro ancoraggio fisico |
+| `docs/VALIDAZIONE_SIMULAZIONE.md` | Risultati sul simulatore (insieme di test separato) |
+| `docs/QA_RAPPORTO.md` | Test eseguiti, dispositivi, problemi aperti |
+| `docs/DECISIONI.md` | Scelte fatte durante lo sviluppo |
+| `docs/TECHNICAL.md` | Architettura BLE, protocollo BlueST, formati |
+| `docs/HARDWARE_TEST.md` | Prova con la SensorTile |
+
+Rigenerare il rapporto del simulatore: `dart run tool/simulation_report.dart` (dalla cartella del progetto).
 
 ## Avvio rapido
 

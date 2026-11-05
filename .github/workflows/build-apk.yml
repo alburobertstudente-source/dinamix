@@ -84,7 +84,24 @@ jobs:
 
       - name: Compila l'APK
         working-directory: ${{ env.PROJECT_DIR }}
-        run: flutter build apk --release
+        # The run number is the versionCode: every APK is newer than the previous one.
+        run: flutter build apk --release --build-number=${{ github.run_number }}
+
+      - name: Android Lint
+        id: lint
+        continue-on-error: true
+        working-directory: ${{ env.PROJECT_DIR }}/android
+        run: ./gradlew :app:lintRelease --no-daemon
+
+      - name: Pubblica il rapporto Lint
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: lint
+          path: ${{ env.PROJECT_DIR }}/build/app/reports/lint-results-release.*
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Rinomina l'APK
         run: mv "$PROJECT_DIR/build/app/outputs/flutter-apk/app-release.apk" dinamix.apk
@@ -103,3 +120,70 @@ jobs:
         run: |
           echo "::error::APK creato, ma analisi, test o screenshot non sono passati. Non considerarlo verificato."
           exit 1
+
+  # QA on an Android emulator (report §18). Separate job: the APK above stays
+  # downloadable even if this fails, but a failure is never hidden.
+  emulatore:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Scarica il progetto
+        uses: actions/checkout@v7
+
+      - name: Trova la cartella del progetto
+        run: |
+          if [ -f dinamix_app.zip ]; then unzip -q -n dinamix_app.zip; fi
+          echo "PROJECT_DIR=dinamix_app" >> "$GITHUB_ENV"
+
+      - name: Abilita KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Installa Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Installa Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Prepara il progetto
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          flutter create --platforms=android --project-name dinamix --org com.dinamix .
+          flutter pub get
+
+      - name: Scarica l'APK compilato
+        uses: actions/download-artifact@v7
+        with:
+          name: dinamix.apk
+          path: apk
+
+      - name: Test su emulatore (API 34)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          working-directory: ${{ env.PROJECT_DIR }}
+          script: bash tool/emulator_qa.sh "$(ls ../apk/*.apk | head -1)"
+
+      - name: Pubblica i risultati QA
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qa-emulatore
+          path: ${{ env.PROJECT_DIR }}/qa
+          retention-days: 14
+          if-no-files-found: warn

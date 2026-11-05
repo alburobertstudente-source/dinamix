@@ -53,6 +53,22 @@ Flusso di un pacchetto: notifica BLE → `ConnectionManager._onData` → decoder
 - **Animazioni.** Lo sfondo e lo scudo sono `CustomPainter` con confini di ridisegno propri, si fermano con l'app in
   background e lo sfondo rispetta l'impostazione di sistema che riduce le animazioni.
 
+### Rilevamento DYNAMIX
+
+```
+PhoneTransport (timestamp hardware, piena frequenza) ─┐
+BlueStMotionAdapter (SensorTile, tempo ricostruito) ──┼─► MonitoringService ─► DetectionEngine (lib/sensing)
+                                                       │        │                 orientamento → a_W → jerk →
+                                                       │        │                 segmentazione → caratteristiche →
+                                                       │        │                 classificatore (livello, categoria, confidenza)
+                                                       │        ├─► EventStore (SQLite dynamix_events.db)
+                                                       │        └─► AlertManager ─► AlertChannel.kt (suono, SMS)
+SimulatorSource / ReplaySource (test) ─────────────────┘
+```
+
+Il motore è Dart puro e uguale per tutte le sorgenti. I grafici e il registratore ricevono i dati del
+telefono decimati a 50 Hz. Profilo e contatto stanno in uno storage cifrato con chiave nell'Android Keystore.
+
 ## 3. Struttura delle cartelle
 
 ```
@@ -102,7 +118,12 @@ oppure sostituire la libreria scrivendo un'altra implementazione di `BleTranspor
 |---|---|
 | Android 12+ | `BLUETOOTH_SCAN` (`neverForLocation`), `BLUETOOTH_CONNECT` |
 | Fino ad Android 11 | `BLUETOOTH`, `BLUETOOTH_ADMIN`, posizione |
-| Registrazione | `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_CONNECTED_DEVICE`, `POST_NOTIFICATIONS`, `WAKE_LOCK` |
+| Registrazione / monitoraggio | `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_CONNECTED_DEVICE`, `POST_NOTIFICATIONS`, `WAKE_LOCK` |
+| Monitoraggio con i soli sensori del telefono (Android 14+) | `FOREGROUND_SERVICE_HEALTH`, `HIGH_SAMPLING_RATE_SENSORS` (permessi normali, nessuna richiesta all'utente) |
+| Allarme | `VIBRATE` |
+| SMS al contatto | `SEND_SMS`, chiesto solo quando si attiva il contatto di emergenza |
+
+Il backup di Android è disattivato (`allowBackup="false"`): profilo e contatto non escono dal telefono.
 
 La connessione richiede un PIN se il firmware lo impone. Il data brief ST indica `123456` per il firmware di fabbrica.
 Se le notifiche vengono rifiutate, l'app chiede l'associazione ad Android e riprova una volta.
