@@ -20,6 +20,8 @@ jobs:
         run: |
           if [ -f dinamix_app.zip ]; then
             unzip -q -o dinamix_app.zip
+            # permission_handler 13.x requires compileSdk 37, not yet in Flutter stable.
+            sed -i 's/permission_handler: ^13.0.2/permission_handler: ^12.0.1/' dinamix_app/pubspec.yaml
           fi
           if [ -f pubspec.yaml ]; then
             echo "PROJECT_DIR=." >> "$GITHUB_ENV"
