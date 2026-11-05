@@ -1,0 +1,33 @@
+name: dinamix
+description: App Android per SensorTile.box PRO (STEVAL-MKBOXPRO) via Bluetooth Low Energy e protocollo BlueST.
+publish_to: none
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.6.0 <4.0.0"
+  flutter: ">=3.27.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Licenza: gratuita per uso educativo/no-profit, a pagamento per uso commerciale.
+  # Vedi docs/TECHNICAL.md, sezione "Licenze".
+  flutter_blue_plus: ^2.3.14
+  # 13.x requires compileSdk 37, not yet supported by Flutter stable (3.47).
+  permission_handler: ^12.0.1
+  sensors_plus: ^7.1.1
+  provider: ^6.1.5
+  sqflite: ^2.4.0
+  path: ^1.9.0
+  path_provider: ^2.1.5
+  shared_preferences: ^2.5.0
+  share_plus: ^13.3.1
+  cross_file: ^0.3.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
