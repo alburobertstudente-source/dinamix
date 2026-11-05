@@ -21,6 +21,9 @@ jobs:
           if [ -f dinamix_app.zip ]; then
             # Files committed under dinamix_app/ take priority over the archive.
             unzip -q -n dinamix_app.zip
+            # Fixes for the uploaded archive (already in the source).
+            sed -i "s/_listen('Accelerometro'/_listen<Vector3Sample>('Accelerometro'/; s/_listen('Giroscopio'/_listen<Vector3Sample>('Giroscopio'/; s/_listen('Magnetometro'/_listen<Vector3Sample>('Magnetometro'/; s/_listen('Barometro'/_listen<double>('Barometro'/" dinamix_app/lib/ble/transport/phone_transport.dart
+            sed -i "s#^import 'package:flutter/rendering.dart';#import 'package:flutter/rendering.dart';\nimport 'package:flutter/services.dart';#" dinamix_app/test/screenshots_test.dart
           fi
           if [ -f pubspec.yaml ]; then
             echo "PROJECT_DIR=." >> "$GITHUB_ENV"
