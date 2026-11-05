@@ -38,6 +38,9 @@ o di sicurezza. Nessuna accuratezza è dichiarata, perché nessuna è stata misu
 24. Domande aggiuntive (oltre al §16)
 25. Architettura doppia: SensorTile e sensori dello smartphone
 26. Domande sulla modalità SensorTile
+27. Analisi matematica completa di ogni movimento
+28. Classificatore a sequenze di fasi e sistema anti-falsi allarmi
+29. Piano di test per i movimenti brevi e intensi
 
 ---
 
@@ -1580,3 +1583,304 @@ Sul telefono questo passo non serve: i timestamp sono hardware (§2).
     accettabile?
 18. **Collegamento perso dopo un urto**: confermi la proposta del §25.3.4
     (evento incerto, nessun aumento automatico del livello)?
+
+
+---
+
+# Parte IV — Analisi completa di ogni movimento
+
+## 27. Analisi matematica completa di ogni movimento
+
+### 27.1 Unità di analisi: il "movimento"
+
+Ogni segmento delimitato dal segmentatore (§8.2) è un **movimento**, anche se
+brevissimo (pochi campioni). Per ogni movimento si calcola l'insieme completo
+di grandezze qui sotto, sempre sui **timestamp reali** (§2, §25.5) e sempre con
+la loro **incertezza** quando non sono misure dirette. Il segmentatore usa
+soglie adattive basse, cioè apre molti segmenti, e così nessun movimento breve
+viene scartato prima dell'analisi. È la classificazione (§28) a decidere cosa è
+normale.
+
+Metodi numerici con passo irregolare:
+
+- integrazione con la **regola dei trapezi** sui Δt reali;
+- giroscopio e accelerometro allineati interpolando ω linearmente sui tempi
+  dell'accelerometro, e l'orientamento con SLERP;
+- **nessun ricampionamento** del canale grezzo per le grandezze di picco;
+- buchi > 3 periodi: il movimento viene marcato e le grandezze integrali
+  attraverso il buco non vengono calcolate (§27.4).
+
+### 27.2 Grandezze calcolate
+
+| Grandezza | Formula / metodo | Note |
+|---|---|---|
+| f_x, f_y, f_z | Grezzo | Conservato sempre |
+| \|f\| | √(f_x² + f_y² + f_z²) | Indizio di caduta libera, **non** accelerazione dinamica (§3.3) |
+| a (dinamica) | a_W = R(q) f − (0, 0, g_cal) (§5) | In W: verticale e orizzontale |
+| Durata | t_fine − t_inizio, e durate sopra 1, 2, 3 volte la linea di base | |
+| Δv | ∫ a_W dt (trapezi) | Vettore: modulo, direzione, verticale e orizzontale. Sempre calcolabile, con l'errore del §27.4 |
+| v_iniziale, v_finale | Solo con un **vincolo** (§27.3) | Altrimenti "non stimabile" |
+| Spostamento s | ∫∫ a_W dt², con correzione ZUPT (§27.3) | Solo con le condizioni del §27.4; sempre con σ |
+| Jerk ĵ | Pendenza ai minimi quadrati (§6.2) | |
+| Variazione del jerk (snap) | Coefficiente di 2° grado di un'interpolazione polinomiale locale ai minimi quadrati (Savitzky–Golay di grado 2), finestra più lunga del jerk | Il rumore cresce come 1/Δt²: peso basso, sempre con σ, mai da solo |
+| ω, \|ω\| | Bias rimosso (§4.2) | |
+| α = dω/dt | Pendenza ai minimi quadrati | |
+| Orientamento | Angolo di q_inizio* ⊗ q_fine, rotazione percorsa ∫\|ω\|dt | Differenza tra netto e percorso = rotazione "avanti e indietro" |
+| Energia del segnale | E_a = ∫ \|a\|² dt [m²/s³], anche per banda (§7.2) | Misura d'intensità, non energia fisica |
+| Energia cinetica specifica | ½\|Δv\|² [J/kg] | Variazione di energia cinetica per unità di massa, se l'oggetto si arresta. Ordine di grandezza fisico dell'urto |
+| Oscillazioni | Frequenza dominante (Goertzel o FFT corta, 0,5–1 s), periodicità (picco dell'autocorrelazione normalizzata), passaggi per lo zero della componente principale | §27.5 |
+| Urti e rimbalzi | Picchi separati da cadute libere, intervalli t_k e rapporto t_{k+1}/t_k (§9.3) | |
+| Vibrazioni successive | Energia nella banda alta dopo l'urto e tempo di smorzamento (inviluppo esponenziale) | |
+
+### 27.3 Velocità e spostamento: quando sono stimabili
+
+L'accelerometro dà solo **variazioni** di velocità: v(t) = v₀ + ∫a dt, e v₀ è
+ignota. Diventa stimabile solo con un vincolo:
+
+| Vincolo | Applicazione |
+|---|---|
+| Quiete prima o dopo (v = 0, rilevatore §8.3) | ZUPT (zero-velocity update): con quiete a entrambi gli estremi, l'errore di bias si corregge sottraendo la rampa lineare v_c(t) = v(t) − v(T)·(t − t₀)/(T − t₀), nell'ipotesi di un bias costante nell'intervallo |
+| Caduta libera | Dopo T_ff di caduta libera partendo da fermo: v_impatto = g·T_ff (verticale) |
+| GPS (veicolo, §10) | v₀ dalla velocità GPS prima dell'evento, con la sua precisione |
+| Nessuno | v_iniziale e v_finale "non stimabili": si riporta solo Δv |
+
+### 27.4 Limiti dell'integrazione (deriva)
+
+Errori dominanti (calcolati, non misurati):
+
+- **Fuga della gravità per errore d'orientamento**: un errore di 1° lascia
+  g·sin(1°) ≈ 0,17 m/s² nell'accelerazione dinamica. Dopo T secondi:
+  - errore di velocità ≈ 0,17·T m/s;
+  - errore di spostamento ≈ ½·0,17·T² m.
+
+  Esempi: **0,2 s → 3 mm**, 0,5 s → 2 cm, **1 s → 9 cm**, 2 s → 34 cm.
+- **Bias residuo** b: velocità b·T, spostamento ½ b T².
+- **Rumore bianco** σ a passo Δt: deviazione della velocità σ√(T·Δt),
+  dello spostamento ≈ σ Δt^½ T^{3/2}/√3. Con i valori illustrativi
+  σ = 0,02 m/s² a 200 Hz e T = 1 s si ottengono 1,4 mm/s e 0,8 mm:
+  trascurabili rispetto alla fuga di gravità.
+- **Saturazione**: l'integrale sottostima Δv (marcata, Q ridotta).
+- **Sottocampionamento** di impulsi brevi (§8.4).
+
+Regole:
+
+1. Lo spostamento si calcola solo su finestre ≤ 1 s, o fino a 2 s con
+   ZUPT a entrambi gli estremi.
+2. Si riporta sempre con σ, propagato da σ_θ (§4.3), dal bias e dal rumore.
+3. Non è mai trattato come una misura esatta.
+4. Il GPS può confrontarlo solo su scale di metri e secondi, non per un
+   evento sotto il secondo.
+
+Δv invece resta affidabile sugli eventi brevi, perché l'errore cresce solo
+linearmente con T: con T = 0,1 s e 1° di errore vale circa 0,017 m/s. Per
+questo Δv, e non lo spostamento, è la grandezza principale.
+
+### 27.5 Accelerazione alta e spostamento ridotto: lo scuotimento
+
+Firma fisica di uno scuotimento con la mano:
+
+- **alternanza**: la componente principale di a cambia segno a ogni
+  mezzo ciclo;
+- **Δv netto ≈ 0** sul segmento e su ogni ciclo, perché la mano riporta il
+  telefono indietro;
+- **ampiezza implicita coerente con una mano**: per un moto armonico,
+  l'ampiezza dello spostamento è A_s = A_a/(2πf)². Per esempio 3 g a 5 Hz
+  danno circa 3 cm, e 2 g a 3 Hz circa 5,5 cm. La stessa relazione,
+  rovesciata, dice che uno scuotimento non produce mai un grande spostamento
+  netto;
+- **periodicità**: autocorrelazione con un picco alla frequenza dominante (già
+  da 2–3 cicli);
+- **rotazione avanti e indietro**: rotazione percorsa ≫ rotazione netta;
+- **assenza** di caduta libera, assenza di rimbalzi geometrici, assenza di un
+  cambio di postura stabile dopo, ripresa immediata del movimento.
+
+Scuotimento violento brevissimo (0,1–0,5 s, quindi 1–3 cicli): la periodicità
+è debole, e contano alternanza, Δv netto ≈ 0, assenza di una sequenza d'urto e
+contesto dopo.
+
+**Attenzione (specifica §2).** Lo spostamento ridotto **non** dimostra che un
+evento sia innocuo. Anche un urto vero ha uno spostamento minimo: la distanza
+di arresto è di millimetri o centimetri. Il discriminante non è lo spostamento
+ma la **struttura**:
+
+| | Scuotimento | Urto |
+|---|---|---|
+| Δv | Alternato, netto ≈ 0 | **Unidirezionale**, netto grande |
+| Impulsi | Ripetuti, simili tra loro | Uno dominante, eventualmente con rimbalzi decrescenti |
+| Prima | Moto della mano | Moto del corpo, veicolo o caduta libera |
+| Dopo | Ripresa immediata | Assestamento, vibrazioni smorzate, cambio di postura, quiete |
+
+Per questo lo spostamento ridotto entra **solo** come indizio a favore di
+"scuotimento" e solo **insieme** all'alternanza e a Δv netto ≈ 0. Non entra
+mai come attenuante generale.
+
+### 27.6 Accelerazione moderata ma prolungata
+
+Esempio: una frenata a 0,5 g per 3 s dà Δv ≈ 14,7 m/s, ma con jerk basso,
+nessun impulso, direzione orizzontale stabile e, quando disponibile, una
+velocità GPS coerente.
+
+Classificazione: "frenata o accelerazione", non urto. La severità usa Δv, la
+**durata**, il **tasso** (Δv/T) e il contesto, perché lo stesso Δv in 50 ms e in
+3 s ha un significato fisico molto diverso. Le grandezze integrali da sole non
+bastano: si valuta sempre anche il tasso.
+
+---
+
+## 28. Classificatore a sequenze di fasi e sistema anti-falsi allarmi
+
+### 28.1 Modello a fasi (cuore del classificatore)
+
+Un movimento è letto come una **sequenza di fasi fisiche**. Insieme di fasi:
+
+```
+Q  quiete            M  moto ordinario (mano, passo, veicolo)
+S  scuotimento        F  caduta libera
+I  impulso / urto     R  rimbalzo (volo balistico breve tra impulsi)
+V  vibrazione smorzata  T  assestamento        P  nuova postura stabile
+B  accelerazione sostenuta (frenata/accelerazione)
+```
+
+Ogni fase ha una **verosimiglianza per campione** calcolata dalle grandezze
+del §27:
+
+- F: \|f\| piccolo rispetto alla soglia f_ff(ω) (§9.1);
+- I: \|ĵ\| e \|a\| alti con durata breve;
+- S: alternanza e periodicità;
+- e così via.
+
+Ogni fase ha anche una **durata modellata** in modo esplicito, con
+distribuzioni dalla fisica: per esempio F ha una durata compatibile con
+√(2h/g) per altezze plausibili, e R con t = 2v/g.
+
+È un **modello semi-Markov a stati nascosti** (HSMM). Con la decodifica di
+Viterbi si ottiene la sequenza di fasi più probabile e la sua verosimiglianza.
+
+Vantaggi:
+
+- **Non richiede che tutte le fasi siano presenti** (specifica §3): le
+  transizioni ammettono salti, per esempio M → I → P senza caduta libera.
+- I parametri iniziali hanno un significato fisico, quindi il modello funziona
+  **senza dati di addestramento inventati**.
+- Con dati etichettati gli stessi parametri si **stimano** (EM o massima
+  verosimiglianza supervisionata): è la parte "addestrabile".
+
+### 28.2 Scenari come grammatiche di fasi
+
+| Categoria | Sequenza tipica (fasi opzionali tra parentesi) |
+|---|---|
+| Telefono scosso intenzionalmente | M → S (breve) → M |
+| Telefono agitato ripetutamente | M → S (lungo, periodico) → M |
+| Appoggiato o spostato sul tavolo | M → I (debole) → Q, con postura piana |
+| Lasciato cadere | (M) → F → I → (R → I)* → V → T → Q/P |
+| Urta una superficie | M → I → (V) → M |
+| Corsa, camminata | M periodico alla cadenza del passo |
+| Movimento sportivo | M intenso, I ripetuti, contesto dell'attività |
+| Frenata o accelerazione | M → B → M (tasso moderato, durata lunga) |
+| Persona che cade con il telefono addosso | M → (F parziale) → I → (V) → P → (Q prolungata) |
+| Impatto potenzialmente pericoloso | … → I forte → P/Q, senza ripresa |
+| Situazione ambigua | Più grammatiche con verosimiglianze vicine |
+
+Per ogni movimento si calcola la verosimiglianza di ogni grammatica con la
+decodifica vincolata. Il **rapporto di verosimiglianza** tra la prima e la
+seconda categoria è la base dell'incertezza: con un margine sotto δ, la
+categoria è **"Situazione ambigua"**.
+
+### 28.3 Combinazione con le caratteristiche e il machine learning
+
+Lo stimatore finale ha tre ingressi:
+
+1. le verosimiglianze delle grammatiche (§28.2);
+2. le caratteristiche del §27.2;
+3. la qualità Q (§11.6).
+
+| Stadio | Decisore | Condizione |
+|---|---|---|
+| Oggi | Regole fisiche + HSMM con parametri fisici | Nessun dato necessario |
+| Con dati reali etichettati | Gradient Boosting sulle stesse caratteristiche **più** le verosimiglianze HSMM; probabilità calibrate (isotoniche) su un set di validazione separato | Adottato solo se supera lo stadio precedente sul set di test, con intervalli di confidenza |
+
+In entrambi gli stadi: **rilevamento fuori distribuzione**. Se le
+caratteristiche sono lontane da tutto ciò che si è visto (D² del §11.3 sopra
+il quantile alto), l'uscita è "Situazione ambigua" e non la classe più vicina.
+
+### 28.4 Regole anti-falsi allarmi (vincoli verificabili)
+
+L'allarme (§12) richiede **tutte** queste condizioni:
+
+1. una categoria pericolosa (persona che cade, impatto pericoloso), oppure
+   "ambigua" con severità alta (§11.4);
+2. **almeno due gruppi di indizi indipendenti** concordi, per esempio
+   l'impulso + (caduta libera o postura o quiete successiva o GPS). Picco
+   d'accelerazione, jerk ed energia dello stesso impulso contano come **un
+   solo gruppo**, perché sono la stessa informazione fisica;
+3. la **fase post-evento** osservata (T_post), salvo i livelli estremi con
+   saturazione e Δv molto alta: anche in quel caso l'allarme parte, ma con il
+   conto alla rovescia di 60 s che lascia il tempo di annullarlo;
+4. Q ≥ Q_min. Sotto, l'evento è "ambiguo per qualità dei dati", e se la
+   severità è alta l'allarme scatta comunque: un dato scadente non deve
+   nascondere un'emergenza. È una scelta da confermare (§16).
+
+**Proprietà garantita dai test (property-based):** *nessun segnale composto da
+un singolo picco isolato*, di qualsiasi ampiezza e orientamento, su fondo di
+quiete o di moto ordinario, può soddisfare la condizione 2, e quindi non può
+attivare l'allarme. Il test genera migliaia di picchi casuali (ampiezza,
+durata, direzione, istante) e verifica l'assenza di allarmi.
+
+### 28.5 Soglie adattive
+
+- Linee di base robuste per (sorgente, posizione, attività) (§8.2, §25.4).
+- Soglie delle verosimiglianze e δ **ricavate sui dati di validazione**,
+  fissando il tasso di falsi allarmi per ora accettato e misurando il recall
+  corrispondente.
+- Prima dei dati reali sono marcate `PROVVISORIO`, con l'ancoraggio fisico
+  dichiarato.
+
+---
+
+## 29. Piano di test per i movimenti brevi e intensi
+
+### 29.1 Simulatore (automatico)
+
+| Test | Generazione | Atteso |
+|---|---|---|
+| Scuotimento violento 0,1–0,5 s | 1–3 cicli sinusoidali, 2–6 g, 3–8 Hz, assi casuali | "Scosso", nessun allarme |
+| Scuotimento ripetuto per secondi | 5–20 s, frequenza e ampiezza variabili | "Agitato", nessun allarme |
+| Picchi alti con spostamento ridotto | Impulsi a semiseno di durata 5–50 ms **isolati** | Nessun allarme (proprietà §28.4) |
+| Rotazioni rapide | ω fino al fondo scala, con braccio di leva r | Nessuna falsa accelerazione dinamica; nessun allarme |
+| Urti morbidi e rigidi | Durata e Δv parametrici, rimbalzi con e | Categoria "urta una superficie" o "lasciato cadere" |
+| Cadute da diverse altezze | h = 0,3–1,5 m, con e senza rotazione | T_ff entro la tolleranza di √(2h/g); "lasciato cadere" |
+| Caduta con telefono in tasca | Modello a pendolo inverso del corpo (semplificato, dichiarato) | "Persona che cade" o "ambigua", mai "scosso" |
+| Movimento sportivo intenso | Profili MTB, sci, corsa con urti ripetuti | Nessun allarme in assenza di sequenza d'urto con postura e quiete |
+| Accelerazione moderata prolungata | 0,2–0,8 g per 1–5 s | "Frenata o accelerazione" |
+
+Ogni test viene ripetuto su più seed e con entrambe le sorgenti (telefono e
+SensorTile, §25.8). Per ogni caso si misurano: categoria, livello, confidenza,
+**tempo di rilevamento**, errore su Δv e T_ff rispetto ai valori veri del
+simulatore.
+
+### 29.2 Prove reali (sicure)
+
+- Scuotimenti, rotazioni, appoggi, urti con la mano: tutti su dispositivo reale.
+- Cadute del telefono su cuscino e su superficie rigida protetta, da altezze
+  misurate.
+- Sport, con il telefono in tasca o nello zaino e la SensorTile nella posizione
+  scelta.
+- **Nessuna caduta di persone provocata.** Per "caduta con il telefono in
+  tasca" si usano dataset pubblici di cadute (citati, con i limiti di posizione
+  e popolazione dichiarati).
+- Ogni prova viene etichettata nello storico eventi (campo `label`, §15.5).
+
+### 29.3 Metriche e dimensione dei campioni
+
+- Per categoria: TP, FP, FN, precisione, recall, F1, matrice di confusione;
+  F1 macro sulle categorie.
+- Allarme: **falsi allarmi per ora** di uso normale, falsi negativi sugli
+  eventi pericolosi, tempo di rilevamento (mediana e 95° percentile).
+- Intervalli di confidenza per ogni proporzione. Regola del tre: con **zero**
+  falsi allarmi in n prove indipendenti, il limite superiore al 95% del tasso
+  è circa 3/n. Per affermare un tasso inferiore all'1% per un tipo di prova
+  servono quindi almeno ~300 prove senza falsi allarmi. Questo numero va tenuto
+  presente prima di qualunque dichiarazione.
+- Risultati del simulatore e risultati reali sempre **separati** ed etichettati.
+  Nessuna soglia o percentuale viene dichiarata senza la misura che la
+  sostiene.
