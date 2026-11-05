@@ -15,3 +15,4 @@ android/*.jks
 android/key.properties
 test/screenshots/
 test/failures/
+android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
